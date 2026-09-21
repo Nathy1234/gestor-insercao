@@ -1046,22 +1046,25 @@
 
 <!-- ── MODAL: COLAR LISTA → DEFINIR STATUS (acha em qualquer tipo/módulo por padrão) ── -->
 <div id="calMarcarLiberadasOverlay" class="dash-modal-overlay" style="display:none" onclick="if(event.target===this) calMarcarLiberadasFechar()">
-  <div class="dash-modal" style="max-width:520px">
+  <div class="dash-modal" style="max-width:560px">
     <div class="dash-modal-header">
-      <div class="card-title">Colar lista de disciplinas — definir status</div>
+      <div class="card-title" id="calMarcarLiberadasTitulo">Colar lista de disciplinas — definir status</div>
       <button type="button" class="btn btn-sm btn-secondary" onclick="calMarcarLiberadasFechar()">✕</button>
     </div>
-    <form method="POST" action="{{ url_for('calendario_disciplinas_marcar_liberadas') }}">
+    <form method="POST" action="{{ url_for('calendario_disciplinas_marcar_liberadas') }}" id="calMarcarLiberadasForm">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="dash-modal-body" style="display:flex;flex-direction:column;gap:10px">
+      <input type="hidden" name="resolucoes" id="calMarcarLiberadasResolucoes" value="{}">
+
+      <!-- FASE 1: colar a lista -->
+      <div id="calMarcarLiberadasFase1" class="dash-modal-body" style="display:flex;flex-direction:column;gap:10px">
         <div style="font-size:11.5px;color:var(--text-muted)">
-          Cole os nomes das disciplinas, um por linha, escolha o status que elas devem ficar e ele aplica em todas de
-          uma vez. Por padrão procura em tudo que já está cadastrado (em qualquer Tipo) — se você sabe o Tipo/Módulo,
-          escolha abaixo pra evitar acertar sem querer uma disciplina de nome igual que esteja em outro lugar.
+          Cole os nomes das disciplinas, um por linha, escolha o status que elas devem ficar. Antes de aplicar, clique
+          em "Conferir" — o sistema mostra o que vai mudar, avisa nomes parecidos (não idênticos, pra você confirmar
+          se é a mesma disciplina) e o que já está cadastrado nesse escopo mas não veio na lista colada.
         </div>
         <div class="form-group">
           <label>Status a aplicar</label>
-          <select name="status" required>
+          <select name="status" id="calMarcarLiberadasStatus" required>
             {% for s in STATUS_DISC %}
             {% if s not in ('nao_iniciado', 'em_curadoria') %}
             <option value="{{ s }}" {% if s == 'liberada_moodle' %}selected{% endif %}>{{ STATUS_DISC_LABEL[s] }}</option>
@@ -1089,11 +1092,17 @@
             </select>
           </div>
         </div>
-        <textarea name="linhas" rows="10" placeholder="Cole aqui, um nome de disciplina por linha" style="width:100%;resize:vertical" required></textarea>
+        <textarea name="linhas" id="calMarcarLiberadasLinhas" rows="10" placeholder="Cole aqui, um nome de disciplina por linha" style="width:100%;resize:vertical" required></textarea>
       </div>
+
+      <!-- FASE 2: conferência (preenchida via JS depois de "Conferir") -->
+      <div id="calMarcarLiberadasFase2" class="dash-modal-body" style="display:none;flex-direction:column;gap:14px"></div>
+
       <div class="dash-modal-footer">
         <button type="button" class="btn btn-secondary" onclick="calMarcarLiberadasFechar()">Cancelar</button>
-        <button type="submit" class="btn btn-primary">Aplicar status</button>
+        <button type="button" class="btn btn-secondary" id="calMarcarLiberadasBtnVoltar" style="display:none" onclick="calMarcarLiberadasVoltar()">← Voltar</button>
+        <button type="button" class="btn btn-primary" id="calMarcarLiberadasBtnConferir" onclick="calMarcarLiberadasConferir()">Conferir</button>
+        <button type="submit" class="btn btn-primary" id="calMarcarLiberadasBtnAplicar" style="display:none">Confirmar e aplicar</button>
       </div>
     </form>
   </div>
@@ -1515,11 +1524,106 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
   }
 
   function calMarcarLiberadasAbrir() {
+    calMarcarLiberadasVoltar();
     document.getElementById('calMarcarLiberadasOverlay').style.display = 'flex';
   }
   function calMarcarLiberadasFechar() {
     document.getElementById('calMarcarLiberadasOverlay').style.display = 'none';
   }
+  function calMarcarLiberadasVoltar() {
+    document.getElementById('calMarcarLiberadasFase1').style.display = 'flex';
+    document.getElementById('calMarcarLiberadasFase2').style.display = 'none';
+    document.getElementById('calMarcarLiberadasBtnConferir').style.display = '';
+    document.getElementById('calMarcarLiberadasBtnAplicar').style.display = 'none';
+    document.getElementById('calMarcarLiberadasBtnVoltar').style.display = 'none';
+    document.getElementById('calMarcarLiberadasResolucoes').value = '{}';
+  }
+  function _calMLEsc(s) {
+    const d = document.createElement('div');
+    d.textContent = s == null ? '' : s;
+    return d.innerHTML;
+  }
+  async function calMarcarLiberadasConferir() {
+    const form = document.getElementById('calMarcarLiberadasForm');
+    const btn = document.getElementById('calMarcarLiberadasBtnConferir');
+    const linhas = document.getElementById('calMarcarLiberadasLinhas').value.trim();
+    if (!linhas) { alert('Cole ao menos um nome de disciplina.'); return; }
+    btn.disabled = true;
+    btn.textContent = 'Conferindo…';
+    try {
+      const fd = new FormData(form);
+      const resp = await fetch("{{ url_for('calendario_disciplinas_marcar_liberadas_conferir') }}", {
+        method: 'POST', body: fd,
+      });
+      const data = await resp.json();
+      if (!data.ok) { alert(data.erro || 'Não consegui conferir a lista.'); return; }
+      calMarcarLiberadasRenderFase2(data);
+      document.getElementById('calMarcarLiberadasFase1').style.display = 'none';
+      document.getElementById('calMarcarLiberadasFase2').style.display = 'flex';
+      document.getElementById('calMarcarLiberadasBtnConferir').style.display = 'none';
+      document.getElementById('calMarcarLiberadasBtnAplicar').style.display = '';
+      document.getElementById('calMarcarLiberadasBtnVoltar').style.display = '';
+    } catch (e) {
+      alert('Não consegui conferir a lista agora. Tente de novo.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Conferir';
+    }
+  }
+  function calMarcarLiberadasRenderFase2(data) {
+    const wrap = document.getElementById('calMarcarLiberadasFase2');
+    const r = data.resumo;
+    let html = '';
+    html += '<div style="font-size:12.5px;background:var(--surface-2);border-radius:8px;padding:10px 14px;display:flex;flex-wrap:wrap;gap:6px 16px">'
+      + '<span><strong>' + r.exatas + '</strong> vão ter o status alterado</span>'
+      + (r.novas ? '<span><strong>' + r.novas + '</strong> nova(s), serão criadas</span>' : '')
+      + (r.parecidas ? '<span style="color:#b35700"><strong>' + r.parecidas + '</strong> parecida(s) — revise abaixo</span>' : '')
+      + (r.sem_tipo ? '<span><strong>' + r.sem_tipo + '</strong> não encontrada(s) (sem Tipo pra criar)</span>' : '')
+      + (r.em_outro_tipo ? '<span><strong>' + r.em_outro_tipo + '</strong> já existe(m) em outro Tipo</span>' : '')
+      + '</div>';
+
+    const parecidas = data.itens.filter(i => i.tipo === 'parecida');
+    window._calMLParecidas = parecidas;
+    if (parecidas.length) {
+      html += '<div><div style="font-weight:600;font-size:13px;margin-bottom:6px">Nomes parecidos — confirme cada um</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:10px">';
+      parecidas.forEach((item, idx) => {
+        html += '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">'
+          + '<div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Colado: "' + _calMLEsc(item.nome) + '"</div>';
+        item.candidatas.forEach((c, ci) => {
+          const rid = 'calMLResol_' + idx + '_' + ci;
+          html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;cursor:pointer">'
+            + '<input type="radio" name="calMLResol_' + idx + '" value="' + c.id + '" id="' + rid + '" data-idx="' + idx + '">'
+            + 'É a mesma disciplina que "<strong>' + _calMLEsc(c.nome) + '</strong>" (' + Math.round(c.score * 100) + '% parecido)'
+            + '</label>';
+        });
+        html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;cursor:pointer">'
+          + '<input type="radio" name="calMLResol_' + idx + '" value="novo" data-idx="' + idx + '" checked>'
+          + 'É diferente — manter como nome separado'
+          + '</label>';
+        html += '</div>';
+      });
+      html += '</div></div>';
+    }
+
+    if (data.faltando && data.faltando.length) {
+      html += '<div><div style="font-weight:600;font-size:13px;margin-bottom:6px">Cadastrado(s) nesse escopo que não vieram na lista colada</div>'
+        + '<div style="font-size:12px;color:var(--text-muted);max-height:140px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px">'
+        + data.faltando.map(f => _calMLEsc(f.nome)).join('<br>')
+        + '</div></div>';
+    }
+
+    wrap.innerHTML = html;
+  }
+  document.getElementById('calMarcarLiberadasForm') && document.getElementById('calMarcarLiberadasForm').addEventListener('submit', function() {
+    const resolucoes = {};
+    const parecidas = window._calMLParecidas || [];
+    document.querySelectorAll('#calMarcarLiberadasFase2 input[type=radio]:checked').forEach(function(r) {
+      const item = parecidas[parseInt(r.dataset.idx, 10)];
+      if (item) resolucoes[item.nome] = r.value;
+    });
+    document.getElementById('calMarcarLiberadasResolucoes').value = JSON.stringify(resolucoes);
+  });
   {% endif %}
 </script>
 {% endblock %}

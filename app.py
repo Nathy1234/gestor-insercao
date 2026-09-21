@@ -9,7 +9,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from markupsafe import Markup, escape
 from datetime import datetime, timedelta, date, timezone
 from functools import wraps
-import hashlib, os, secrets, shutil, json, threading, time, io, zipfile, unicodedata as _ucd, re as _re, calendar as _calendar
+import hashlib, os, secrets, shutil, json, threading, time, io, zipfile, unicodedata as _ucd, re as _re, calendar as _calendar, difflib as _difflib
 import requests as _requests
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import icalendar as _icalendar
@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.19.51'
+VERSAO = '1.19.52'
 NO_AR_DESDE = '22/05/2026'
 
 @app.context_processor
@@ -5929,36 +5929,31 @@ def calendario_disciplina_status_lote():
     destino = _voltar_seguro(url_for('calendario', aba='disciplinas'))
     return redirect(destino)
 
-@app.route('/calendario/disciplinas/marcar-liberadas', methods=['POST'])
-@admin_required
-def calendario_disciplinas_marcar_liberadas():
-    """Cola uma lista de nomes de disciplinas — busca o nome (sem acento/
-    maiúsculas) nas disciplinas cadastradas e aplica o status escolhido em
-    todas de uma vez (Stand-by, Em Andamento, Inserida, Liberada no Moodle
-    ou Liberada no Inova). Por padrão procura em qualquer Tipo/Módulo, mas
-    Tipo e Módulo são opcionais no formulário — se informados, restringe a
-    busca a eles, pra evitar acertar por engano uma disciplina de nome
-    igual que exista em outro Tipo/Módulo."""
-    nomes = [l.strip() for l in (request.form.get('linhas') or '').splitlines() if l.strip()]
-    if not nomes:
-        flash('Cole ao menos um nome de disciplina.', 'danger')
-        return redirect(url_for('calendario', aba='disciplinas'))
-    status_alvo = request.form.get('status') or ''
-    if status_alvo not in STATUS_DISC_MODULO or status_alvo in ('nao_iniciado', 'em_curadoria'):
-        status_alvo = 'liberada_moodle'
-    modulo = (request.form.get('modulo') or '').strip()
-    submodulo = (request.form.get('submodulo') or '').strip()
-
-    # tira nomes repetidos na própria lista colada (mantém o 1º jeito escrito)
+def _dedup_nomes_colados(texto):
+    """Tira nomes repetidos na própria lista colada (mantém o 1º jeito
+    escrito), comparando sem acento/maiúsculas."""
     vistos_norm = set()
     nomes_unicos = []
-    for n in nomes:
+    for l in (texto or '').splitlines():
+        n = l.strip()
+        if not n:
+            continue
         norm = _norm_name(n)
         if norm in vistos_norm:
             continue
         vistos_norm.add(norm)
         nomes_unicos.append(n)
+    return nomes_unicos
 
+def _conferir_colagem_disciplinas(nomes_unicos, modulo, submodulo):
+    """Compara os nomes colados com as disciplinas já cadastradas no escopo
+    (Tipo/Módulo, se informado): cada nome colado vira um item 'exata' (achou
+    igual, sem acento/maiúsculas), 'parecida' (nome próximo mas não igual —
+    lista candidatas pra pessoa escolher, nunca aplica sozinho), 'em_outro_tipo'
+    (já existe fora do escopo escolhido) ou 'nova' (não achou nada — cria se
+    tiver Tipo escolhido; sem Tipo vira 'sem_tipo', fica de fora). Também
+    devolve o que já está cadastrado no escopo mas não veio na lista colada
+    (divergência, pra quem colou saber se esqueceu de alguma)."""
     query = DisciplinaModulo.query.filter_by(arquivado=False)
     if modulo:
         query = query.filter_by(modulo=modulo)
@@ -5977,32 +5972,147 @@ def calendario_disciplinas_marcar_liberadas():
         for d in DisciplinaModulo.query.filter_by(arquivado=False).all():
             todas_por_norm.setdefault(_norm_name(d.nome), []).append(d)
 
-    alteradas = 0
-    inseridas = 0
-    sem_tipo_pra_criar = 0
-    existentes_em_outro_tipo = []  # [(nome_colado, "Tipo / Módulo"), ...]
-    agora = datetime.utcnow()
+    normas_disponiveis = list(candidatas_por_norm.keys())
+    normas_coladas = set()
+    itens = []
     for nome in nomes_unicos:
         norm = _norm_name(nome)
+        normas_coladas.add(norm)
         achadas = candidatas_por_norm.get(norm)
         if achadas:
-            for d in achadas:
-                d.status = status_alvo
-                d.status_em = agora
-                alteradas += 1
+            itens.append({'nome': nome, 'tipo': 'exata',
+                           'existentes': [{'id': d.id, 'nome': d.nome} for d in achadas]})
+            continue
+        proximas = _difflib.get_close_matches(norm, normas_disponiveis, n=3, cutoff=0.72)
+        if proximas:
+            candidatas = []
+            for pnorm in proximas:
+                score = _difflib.SequenceMatcher(None, norm, pnorm).ratio()
+                for d in candidatas_por_norm[pnorm]:
+                    candidatas.append({'id': d.id, 'nome': d.nome, 'score': round(score, 2)})
+            candidatas.sort(key=lambda c: -c['score'])
+            itens.append({'nome': nome, 'tipo': 'parecida', 'candidatas': candidatas})
             continue
         if not modulo:
-            sem_tipo_pra_criar += 1
+            itens.append({'nome': nome, 'tipo': 'sem_tipo'})
             continue
         outras = todas_por_norm.get(norm)
         if outras:
-            for d in outras:
-                onde = d.modulo + (f' / {d.submodulo}' if d.submodulo else '')
-                existentes_em_outro_tipo.append(f'{nome} (está em "{onde}")')
+            onde = outras[0].modulo + (f' / {outras[0].submodulo}' if outras[0].submodulo else '')
+            itens.append({'nome': nome, 'tipo': 'em_outro_tipo', 'onde': onde})
             continue
-        db.session.add(DisciplinaModulo(modulo=modulo, submodulo=submodulo or None, nome=nome,
-                                         status=status_alvo, status_em=agora, created_by=session['user_id']))
-        inseridas += 1
+        itens.append({'nome': nome, 'tipo': 'nova'})
+
+    faltando = [
+        {'id': d.id, 'nome': d.nome}
+        for norm, ds in candidatas_por_norm.items() if norm not in normas_coladas
+        for d in ds
+    ]
+    return itens, faltando
+
+@app.route('/calendario/disciplinas/marcar-liberadas/conferir', methods=['POST'])
+@admin_required
+def calendario_disciplinas_marcar_liberadas_conferir():
+    """Só analisa a lista colada, não grava nada — devolve exatas/parecidas/
+    novas e a divergência (cadastrado no escopo mas que não veio na lista),
+    pra pessoa revisar e confirmar antes de aplicar de verdade
+    (ver calendario_disciplinas_marcar_liberadas)."""
+    nomes_unicos = _dedup_nomes_colados(request.form.get('linhas'))
+    if not nomes_unicos:
+        return jsonify({'ok': False, 'erro': 'Cole ao menos um nome de disciplina.'})
+    modulo = (request.form.get('modulo') or '').strip()
+    submodulo = (request.form.get('submodulo') or '').strip()
+    itens, faltando = _conferir_colagem_disciplinas(nomes_unicos, modulo, submodulo)
+    return jsonify({
+        'ok': True,
+        'itens': itens,
+        'faltando': faltando,
+        'resumo': {
+            'exatas': sum(1 for i in itens if i['tipo'] == 'exata'),
+            'parecidas': sum(1 for i in itens if i['tipo'] == 'parecida'),
+            'novas': sum(1 for i in itens if i['tipo'] == 'nova'),
+            'sem_tipo': sum(1 for i in itens if i['tipo'] == 'sem_tipo'),
+            'em_outro_tipo': sum(1 for i in itens if i['tipo'] == 'em_outro_tipo'),
+            'faltando': len(faltando),
+        },
+    })
+
+@app.route('/calendario/disciplinas/marcar-liberadas', methods=['POST'])
+@admin_required
+def calendario_disciplinas_marcar_liberadas():
+    """Cola uma lista de nomes de disciplinas — busca o nome (sem acento/
+    maiúsculas) nas disciplinas cadastradas e aplica o status escolhido em
+    todas de uma vez (Stand-by, Em Andamento, Inserida, Liberada no Moodle
+    ou Liberada no Inova). Por padrão procura em qualquer Tipo/Módulo, mas
+    Tipo e Módulo são opcionais no formulário — se informados, restringe a
+    busca a eles, pra evitar acertar por engano uma disciplina de nome
+    igual que exista em outro Tipo/Módulo. Nome parecido (não idêntico) só
+    conta como a mesma disciplina se vier resolvido em `resolucoes` (JSON
+    nome colado -> id existente escolhido, ou "novo") — isso é preenchido
+    depois da tela de conferência; sem resolução, segue como nome não
+    encontrado (mesma regra seria aplicada mesmo sem passar pela conferência)."""
+    nomes_unicos = _dedup_nomes_colados(request.form.get('linhas'))
+    if not nomes_unicos:
+        flash('Cole ao menos um nome de disciplina.', 'danger')
+        return redirect(url_for('calendario', aba='disciplinas'))
+    status_alvo = request.form.get('status') or ''
+    if status_alvo not in STATUS_DISC_MODULO or status_alvo in ('nao_iniciado', 'em_curadoria'):
+        status_alvo = 'liberada_moodle'
+    modulo = (request.form.get('modulo') or '').strip()
+    submodulo = (request.form.get('submodulo') or '').strip()
+    try:
+        resolucoes = json.loads(request.form.get('resolucoes') or '{}')
+    except (ValueError, TypeError):
+        resolucoes = {}
+
+    itens, _faltando = _conferir_colagem_disciplinas(nomes_unicos, modulo, submodulo)
+
+    alteradas = 0
+    inseridas = 0
+    sem_tipo_pra_criar = 0
+    existentes_em_outro_tipo = []  # ["nome (está em \"Tipo / Módulo\")", ...]
+    ids_ja_marcados = set()
+    agora = datetime.utcnow()
+    for item in itens:
+        nome, tipo = item['nome'], item['tipo']
+        if tipo == 'parecida':
+            resolucao = resolucoes.get(nome)
+            d = None
+            if resolucao and resolucao != 'novo':
+                try:
+                    d = DisciplinaModulo.query.get(int(resolucao))
+                except (TypeError, ValueError):
+                    d = None
+            if d:
+                if d.id not in ids_ja_marcados:
+                    d.status = status_alvo
+                    d.status_em = agora
+                    alteradas += 1
+                    ids_ja_marcados.add(d.id)
+                continue
+            # sem resolução (ou resolvida como "novo"): segue igual a um
+            # nome não encontrado — cria se tiver Tipo, senão fica de fora.
+            tipo = 'nova' if modulo else 'sem_tipo'
+        if tipo == 'exata':
+            for e in item['existentes']:
+                if e['id'] in ids_ja_marcados:
+                    continue
+                d = DisciplinaModulo.query.get(e['id'])
+                d.status = status_alvo
+                d.status_em = agora
+                alteradas += 1
+                ids_ja_marcados.add(d.id)
+        elif tipo == 'em_outro_tipo':
+            existentes_em_outro_tipo.append(f"{nome} (está em \"{item['onde']}\")")
+        elif tipo == 'sem_tipo':
+            sem_tipo_pra_criar += 1
+        elif tipo == 'nova':
+            if not modulo:
+                sem_tipo_pra_criar += 1
+            else:
+                db.session.add(DisciplinaModulo(modulo=modulo, submodulo=submodulo or None, nome=nome,
+                                                 status=status_alvo, status_em=agora, created_by=session['user_id']))
+                inseridas += 1
     db.session.commit()
 
     escopo = f' em "{modulo}"' + (f' / "{submodulo}"' if submodulo else '') if modulo else ''
