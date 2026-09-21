@@ -862,9 +862,27 @@ textarea { resize: vertical; min-height: 80px; }
   width: 100%; max-width: 420px; max-height: 84vh; display: flex; flex-direction: column;
   box-shadow: var(--shadow);
 }
-.dash-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.dash-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .dash-modal-body { padding: 16px 18px; overflow-y: auto; }
-.dash-modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); }
+.dash-modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+
+/* ── "COLAR LISTA" — CARDS DE NOME PARECIDO (conferência antes de aplicar) ── */
+.calML-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.calML-card-colado { font-size: 12.5px; margin-bottom: 4px; }
+.calML-opt {
+  display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.4;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer; border: 1px solid transparent;
+}
+.calML-opt:hover { background: var(--surface-2); }
+.calML-opt input[type=radio] { margin-top: 3px; flex-shrink: 0; }
+.calML-opt-text { flex: 1; }
+.calML-opt-score {
+  flex-shrink: 0; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
+  background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; white-space: nowrap;
+}
+.calML-opt:has(input:checked) { background: var(--primary-light); border-color: var(--primary); }
+.calML-opt-novo { color: var(--text-muted); }
+[data-theme="dark"] .calML-opt-score { background: #052e16; color: #86efac; border-color: #14532d; }
 
 .dash-admin-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .dash-admin-item {

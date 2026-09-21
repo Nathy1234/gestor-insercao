@@ -1051,12 +1051,12 @@
       <div class="card-title" id="calMarcarLiberadasTitulo">Colar lista de disciplinas — definir status</div>
       <button type="button" class="btn btn-sm btn-secondary" onclick="calMarcarLiberadasFechar()">✕</button>
     </div>
-    <form method="POST" action="{{ url_for('calendario_disciplinas_marcar_liberadas') }}" id="calMarcarLiberadasForm">
+    <form method="POST" action="{{ url_for('calendario_disciplinas_marcar_liberadas') }}" id="calMarcarLiberadasForm" style="display:flex;flex-direction:column;min-height:0;flex:1">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="resolucoes" id="calMarcarLiberadasResolucoes" value="{}">
 
       <!-- FASE 1: colar a lista -->
-      <div id="calMarcarLiberadasFase1" class="dash-modal-body" style="display:flex;flex-direction:column;gap:10px">
+      <div id="calMarcarLiberadasFase1" class="dash-modal-body" style="display:flex;flex-direction:column;gap:10px;min-height:0;flex:1">
         <div style="font-size:11.5px;color:var(--text-muted)">
           Cole os nomes das disciplinas, um por linha, escolha o status que elas devem ficar. Antes de aplicar, clique
           em "Conferir" — o sistema mostra o que vai mudar, avisa nomes parecidos (não idênticos, pra você confirmar
@@ -1096,7 +1096,7 @@
       </div>
 
       <!-- FASE 2: conferência (preenchida via JS depois de "Conferir") -->
-      <div id="calMarcarLiberadasFase2" class="dash-modal-body" style="display:none;flex-direction:column;gap:14px"></div>
+      <div id="calMarcarLiberadasFase2" class="dash-modal-body" style="display:none;flex-direction:column;gap:14px;min-height:0;flex:1"></div>
 
       <div class="dash-modal-footer">
         <button type="button" class="btn btn-secondary" onclick="calMarcarLiberadasFechar()">Cancelar</button>
@@ -1585,21 +1585,28 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
     const parecidas = data.itens.filter(i => i.tipo === 'parecida');
     window._calMLParecidas = parecidas;
     if (parecidas.length) {
-      html += '<div><div style="font-weight:600;font-size:13px;margin-bottom:6px">Nomes parecidos — confirme cada um</div>';
-      html += '<div style="display:flex;flex-direction:column;gap:10px">';
+      html += '<div>'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;flex-wrap:wrap">'
+        + '<div style="font-weight:600;font-size:13px">Nomes parecidos — confirme cada um</div>'
+        + '<button type="button" class="btn btn-sm btn-secondary" onclick="calMarcarLiberadasAceitarAltaConfianca()">✓ Aceitar sugestões ≥ 95%</button>'
+        + '</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:8px">';
       parecidas.forEach((item, idx) => {
-        html += '<div style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">'
-          + '<div style="font-size:12.5px;font-weight:600;margin-bottom:6px">Colado: "' + _calMLEsc(item.nome) + '"</div>';
+        html += '<div class="calML-card">'
+          + '<div class="calML-card-colado">Colado: <strong>"' + _calMLEsc(item.nome) + '"</strong></div>';
         item.candidatas.forEach((c, ci) => {
           const rid = 'calMLResol_' + idx + '_' + ci;
-          html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;cursor:pointer">'
-            + '<input type="radio" name="calMLResol_' + idx + '" value="' + c.id + '" id="' + rid + '" data-idx="' + idx + '">'
-            + 'É a mesma disciplina que "<strong>' + _calMLEsc(c.nome) + '</strong>" (' + Math.round(c.score * 100) + '% parecido)'
+          const pct = Math.round(c.score * 100);
+          html += '<label class="calML-opt" for="' + rid + '">'
+            + '<input type="radio" name="calMLResol_' + idx + '" value="' + c.id + '" id="' + rid + '" data-idx="' + idx + '" data-score="' + c.score + '">'
+            + '<span class="calML-opt-text">É a mesma disciplina que <strong>' + _calMLEsc(c.nome) + '</strong></span>'
+            + '<span class="calML-opt-score">' + pct + '%</span>'
             + '</label>';
         });
-        html += '<label style="display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0;cursor:pointer">'
-          + '<input type="radio" name="calMLResol_' + idx + '" value="novo" data-idx="' + idx + '" checked>'
-          + 'É diferente — manter como nome separado'
+        const ridNovo = 'calMLResol_' + idx + '_novo';
+        html += '<label class="calML-opt calML-opt-novo" for="' + ridNovo + '">'
+          + '<input type="radio" name="calMLResol_' + idx + '" value="novo" id="' + ridNovo + '" data-idx="' + idx + '" checked>'
+          + '<span class="calML-opt-text">É diferente — manter como nome separado</span>'
           + '</label>';
         html += '</div>';
       });
@@ -1614,6 +1621,11 @@ select.cal-disc-badge-liberada_inova  { background:#ede9fe; color:#6d28d9; }
     }
 
     wrap.innerHTML = html;
+  }
+  function calMarcarLiberadasAceitarAltaConfianca() {
+    document.querySelectorAll('#calMarcarLiberadasFase2 input[type=radio][data-score]').forEach(function(r) {
+      if (parseFloat(r.dataset.score) >= 0.95) r.checked = true;
+    });
   }
   document.getElementById('calMarcarLiberadasForm') && document.getElementById('calMarcarLiberadasForm').addEventListener('submit', function() {
     const resolucoes = {};
