@@ -178,13 +178,11 @@
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <form method="POST" action="{{ url_for('reembolso_enviar_email', id=item.id) }}" style="display:inline">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button type="submit" style="white-space:nowrap;background:#16a34a;color:#fff;border:none;border-radius:8px;
-                             padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer">
-                ✓ Enviar agora
-              </button>
-            </form>
+            <button type="submit" formaction="{{ url_for('reembolso_enviar_email', id=item.id) }}" formmethod="POST"
+                    style="white-space:nowrap;background:#16a34a;color:#fff;border:none;border-radius:8px;
+                           padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer">
+              ✓ Enviar agora
+            </button>
             <button type="button" onclick="gerarEmailForm()"
                     style="white-space:nowrap;background:#f2780d;color:#fff;border:none;border-radius:8px;
                            padding:10px 20px;font-size:13px;font-weight:600;cursor:pointer;
