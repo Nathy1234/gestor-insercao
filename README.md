@@ -1,4 +1,4 @@
-# 🎓 Gestor da Equipe de Inserção — Gestor Acadêmico
+# 🎓 Gestor da Equipe de Inserção
 
 Sistema interno da equipe de Inserção pra controlar o que é inserido na Inova
 Carreira e nos Moodles, substituindo o controle por planilhas soltas: catálogo
@@ -143,7 +143,7 @@ no `CLAUDE.md`.
 
 ## 🗂️ Estrutura do Projeto
 
-```
+\`\`\`
 inova_system/
 ├── app.py              ← Aplicação inteira (rotas, modelos, lógica de negócio)
 ├── requirements.txt    ← Dependências Python
