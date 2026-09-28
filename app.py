@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.19.53'
+VERSAO = '1.20.0'
 NO_AR_DESDE = '22/05/2026'
 
 @app.context_processor
@@ -3715,6 +3715,171 @@ def banco_disciplinas_relatorio():
                            gerado_em=datetime.now())
 
 
+_IA_STATUS_LIBERADA = ('liberada_moodle', 'liberada_inova')
+
+
+def _ia_card_disciplina(d, hoje, pode_agir):
+    dias = (hoje - d.status_em.date()).days if d.status_em else None
+    detalhe = d.modulo + (f' / {d.submodulo}' if d.submodulo else '')
+    if d.professor:
+        detalhe += f' · {d.professor}'
+    acoes = []
+    if pode_agir:
+        if d.status != 'inserida':
+            acoes.append({'label': 'Inserida', 'url': url_for('calendario_disciplina_status', id=d.id),
+                          'status': 'inserida'})
+        acoes.append({'label': 'Liberada no Moodle', 'url': url_for('calendario_disciplina_status', id=d.id),
+                      'status': 'liberada_moodle', 'principal': True})
+    return {
+        'titulo': d.nome,
+        'detalhe': detalhe,
+        'badge': STATUS_DISC_MODULO_LABEL.get(d.status, d.status) if d.status != 'nao_iniciado' else 'Não iniciada',
+        'cor': STATUS_DISC_MODULO_COR.get(d.status, '#a1a1aa'),
+        'rodape': (f'nesta etapa há {dias} dia(s)' if dias else 'mudou de etapa hoje') if dias is not None else '',
+        'link': url_for('calendario', aba='disciplinas', tipo=d.modulo),
+        'acoes': acoes,
+    }
+
+
+def _ia_consulta_calendario(p, u, _contem, _norm):
+    """Perguntas do IA Assistente sobre o Calendário (demandas e disciplinas
+    de inserção). Devolve {'resposta', 'cards', 'sugestoes'} ou None se a
+    pergunta não for sobre isso. Os cards trazem botões que só aparecem pra
+    quem já pode registrar aquele status na tela do Calendário — o clique usa
+    as mesmas rotas POST de lá (mesma permissão, CSRF e log), nada muda
+    sozinho."""
+    if not u or not u.can_view_calendario():
+        return None
+    hoje = date.today()
+    demo = u.is_conta_demo()
+    pode_disc = not demo  # mesma regra da rota de status: aberto à equipe
+    ativas = DisciplinaModulo.query.filter_by(arquivado=False)
+
+    # ── Pendências de um Tipo específico ("o que falta de ENADE?") ──
+    tipos = [t for (t,) in db.session.query(DisciplinaModulo.modulo).filter_by(arquivado=False).distinct()]
+    pn = _norm(p)
+    # palavra inteira — senão um Tipo "APA" casaria dentro de "CAPACITACAO"
+    citados = sorted((t for t in tipos
+                      if _norm(t) and _re.search(r'(?<!\w)' + _re.escape(_norm(t)) + r'(?!\w)', pn)),
+                     key=len, reverse=True)
+    # só com contexto de andamento — "quais eventos estão cadastrados?" continua
+    # indo pro bloco de cursos mesmo se existir um Tipo chamado "EVENTOS"
+    if citados and _contem(p, 'falta', 'pendente', 'pendencia', 'liberad', 'andamento',
+                           'status', 'disciplina', 'como esta', 'situacao'):
+        tipo = citados[0]
+        pendentes = [d for d in ativas.filter_by(modulo=tipo).order_by(
+                         DisciplinaModulo.submodulo, DisciplinaModulo.ordem, DisciplinaModulo.nome).all()
+                     if d.status not in _IA_STATUS_LIBERADA]
+        total = ativas.filter_by(modulo=tipo).count()
+        if not pendentes:
+            return {'resposta': f'✅ **{tipo}**: todas as {total} disciplina(s) já estão liberadas.',
+                    'cards': [], 'sugestoes': ['Resumo das disciplinas por tipo']}
+        por_status = {}
+        for d in pendentes:
+            por_status[d.status] = por_status.get(d.status, 0) + 1
+        linhas = [f'**{tipo}** — {len(pendentes)} de {total} disciplina(s) ainda não liberada(s):']
+        for st, n in sorted(por_status.items(), key=lambda x: _PRIORIDADE_STATUS_LISTAGEM.get(x[0], 99)):
+            rotulo = STATUS_DISC_MODULO_LABEL.get(st, st) if st != 'nao_iniciado' else 'Não iniciada'
+            linhas.append(f'• {rotulo}: {n}')
+        cards = [_ia_card_disciplina(d, hoje, pode_disc) for d in pendentes[:30]]
+        if len(pendentes) > 30:
+            linhas.append(f'\n_Mostrando 30 de {len(pendentes)} — o resto está no Calendário._')
+        return {'resposta': '\n'.join(linhas), 'cards': cards, 'sugestoes': ['Disciplinas paradas há mais de 7 dias']}
+
+    # ── Resumo por Tipo (mini dashboard) ──
+    if _contem(p, 'por tipo', 'resumo das disciplinas', 'andamento das disciplinas',
+               'dashboard', 'painel das disciplinas', 'disciplinas de insercao'):
+        grupos = [_resumo_de_tipo(g) for g in _disciplinas_agrupadas()]
+        if not grupos:
+            return {'resposta': 'Ainda não há disciplinas cadastradas no Calendário.', 'cards': [], 'sugestoes': []}
+        grupos.sort(key=lambda g: -g['pendentes'])
+        tot = sum(g['total'] for g in grupos)
+        lib = sum(g['liberadas'] for g in grupos)
+        cards = [{
+            'titulo': g['nome'],
+            'detalhe': f"{g['liberadas']} de {g['total']} liberada(s)",
+            'badge': f"{g['pendentes']} pendente(s)" if g['pendentes'] else 'Concluído',
+            'cor': '#ca8a04' if g['pendentes'] else '#15803d',
+            'progresso': round(100 * g['liberadas'] / g['total']) if g['total'] else 0,
+            'link': url_for('calendario', aba='disciplinas', tipo=g['nome']),
+            'perguntas': [f"O que falta de {g['nome']}?"] if g['pendentes'] else [],
+            'acoes': [],
+        } for g in grupos]
+        return {'resposta': f'**Disciplinas por tipo** — {lib} de {tot} liberada(s), '
+                            f'{tot - lib} pendente(s) no total.',
+                'cards': cards, 'sugestoes': ['Disciplinas paradas há mais de 7 dias', 'Demandas atrasadas']}
+
+    # ── Disciplinas paradas (sem mudar de etapa há X dias) ──
+    if _contem(p, 'parad', 'sem movimento', 'travad', 'esquecid', 'sem andamento'):
+        m = _re.search(r'(\d+)\s*dia', p)
+        limite = int(m.group(1)) if m else 7
+        corte = datetime.utcnow() - timedelta(days=limite)
+        paradas = ativas.filter(
+            DisciplinaModulo.status.in_(['em_producao', 'em_andamento', 'inserida', 'em_curadoria']),
+            DisciplinaModulo.status_em < corte).order_by(DisciplinaModulo.status_em).all()
+        if not paradas:
+            return {'resposta': f'Nenhuma disciplina em andamento parada há mais de {limite} dia(s). 👍',
+                    'cards': [], 'sugestoes': ['Resumo das disciplinas por tipo']}
+        linhas = [f'**{len(paradas)} disciplina(s)** em andamento sem mudar de etapa há mais de {limite} dia(s) '
+                  f'(as mais antigas primeiro):']
+        if len(paradas) > 30:
+            linhas.append(f'_Mostrando 30 de {len(paradas)}._')
+        return {'resposta': '\n'.join(linhas),
+                'cards': [_ia_card_disciplina(d, hoje, pode_disc) for d in paradas[:30]],
+                'sugestoes': ['Resumo das disciplinas por tipo']}
+
+    # ── Demandas do calendário ──
+    if _contem(p, 'demanda', 'atrasad', 'vencid', 'pendencia', 'pendente'):
+        q = Demanda.query.filter(Demanda.status != 'finalizado')
+        if _contem(p, 'atrasad', 'vencid'):
+            q = q.filter(Demanda.data_fim < hoje)
+            titulo = 'atrasada(s)'
+        elif _contem(p, 'hoje'):
+            q = q.filter(Demanda.data_fim <= hoje)
+            titulo = 'com prazo até hoje'
+        elif _contem(p, 'semana'):
+            q = q.filter(Demanda.data_fim <= hoje + timedelta(days=7))
+            titulo = 'com prazo até os próximos 7 dias'
+        else:
+            titulo = 'em aberto'
+        demandas = q.order_by(Demanda.data_fim).all()
+        pend_disc = sum(1 for (st,) in ativas.with_entities(DisciplinaModulo.status)
+                        if st not in _IA_STATUS_LIBERADA)
+        if not demandas:
+            return {'resposta': f'Nenhuma demanda {titulo}. 🎉\n\n'
+                                f'Disciplinas ainda não liberadas no calendário: **{pend_disc}**.',
+                    'cards': [], 'sugestoes': ['Resumo das disciplinas por tipo']}
+        cards = []
+        for dm in demandas[:30]:
+            atraso = (hoje - dm.data_fim).days
+            if atraso > 0:
+                badge, cor = f'Atrasada {atraso} dia(s)', '#dc2626'
+            elif atraso == 0:
+                badge, cor = 'Vence hoje', '#ea580c'
+            else:
+                badge, cor = f'Vence em {-atraso} dia(s)', '#ca8a04'
+            if dm.status == 'stand_by':
+                badge += ' · Stand By'
+            resp = '' if demo else ', '.join(x.nome or x.username for x in dm.responsaveis_usuarios())
+            cards.append({
+                'titulo': dm.titulo,
+                'detalhe': f"Prazo {dm.data_fim.strftime('%d/%m/%Y')}" + (f' · {resp}' if resp else ''),
+                'badge': badge, 'cor': cor,
+                'rodape': (dm.descricao or '')[:160],
+                'link': url_for('calendario', aba='lista'),
+                'acoes': [{'label': 'Concluir', 'url': url_for('calendario_status', id=dm.id),
+                           'status': 'finalizado', 'principal': True}]
+                         if (not demo and dm.pode_registrar_status(u)) else [],
+            })
+        linhas = [f'**{len(demandas)} demanda(s) {titulo}**, prazo mais próximo primeiro.']
+        if len(demandas) > 30:
+            linhas.append(f'_Mostrando 30 de {len(demandas)}._')
+        linhas.append(f'Disciplinas ainda não liberadas no calendário: **{pend_disc}**.')
+        return {'resposta': '\n'.join(linhas), 'cards': cards,
+                'sugestoes': ['Resumo das disciplinas por tipo', 'Disciplinas paradas há mais de 7 dias']}
+    return None
+
+
 @app.route('/ia-assistente')
 @perm_check('can_view_ia_assistente')
 def ia_assistente():
@@ -3751,6 +3916,11 @@ def ia_chat():
 
     p = pergunta
     linhas = []
+
+    # ── CALENDÁRIO: DEMANDAS E DISCIPLINAS DE INSERÇÃO (com botões de ação) ──
+    calendario_resp = _ia_consulta_calendario(p, User.query.get(session['user_id']), _contem, _norm)
+    if calendario_resp:
+        return jsonify({'ok': True, **calendario_resp})
 
     # ── CONHECIMENTO GERAL: ESTRUTURA DOS CURSOS NA PLATAFORMA ──────────
     # Baseado no POP 120-01 – Processo de Revisão e Curadoria de Materiais.

@@ -46,6 +46,12 @@
 
   <!-- SUGESTÕES RÁPIDAS -->
   <div id="sugestoes-rapidas" style="flex-shrink:0;display:flex;flex-wrap:wrap;gap:8px;padding:10px 0">
+    {% if can_calendario %}
+    <button onclick="usarSugestao(this)" class="btn btn-secondary chip-pendencia">Demandas atrasadas</button>
+    <button onclick="usarSugestao(this)" class="btn btn-secondary chip-pendencia">Demandas pendentes desta semana</button>
+    <button onclick="usarSugestao(this)" class="btn btn-secondary chip-pendencia">Resumo das disciplinas por tipo</button>
+    <button onclick="usarSugestao(this)" class="btn btn-secondary chip-pendencia">Disciplinas paradas há mais de 7 dias</button>
+    {% endif %}
     <button onclick="usarSugestao(this)" class="btn btn-secondary"
             style="font-size:12px;padding:5px 12px;border-radius:20px">
       Quais eventos estão cadastrados?
@@ -123,6 +129,24 @@
   }
   .typing-dot:nth-child(1) { animation-delay: -0.32s; }
   .typing-dot:nth-child(2) { animation-delay: -0.16s; }
+
+  .chip-pendencia { font-size:12px;padding:5px 12px;border-radius:20px;border-color:#6366f1;color:#6366f1; }
+  .ia-cards { display:flex;flex-direction:column;gap:8px;margin:0 0 0 42px;max-width:calc(82% - 42px); }
+  .ia-card { background:var(--card);border:1px solid var(--border);border-left:4px solid var(--cor, #a1a1aa);
+             border-radius:10px;padding:10px 14px;font-size:13px; }
+  .ia-card.feito { opacity:.6; }
+  .ia-card-topo { display:flex;justify-content:space-between;gap:10px;align-items:flex-start; }
+  .ia-card-titulo { font-weight:600;color:var(--text);text-decoration:none; }
+  .ia-card-titulo:hover { text-decoration:underline; }
+  .ia-card-badge { font-size:11px;font-weight:600;white-space:nowrap;padding:2px 8px;border-radius:10px;
+                   color:#fff;background:var(--cor, #a1a1aa); }
+  .ia-card-detalhe, .ia-card-rodape { font-size:12px;color:var(--text-muted);margin-top:2px; }
+  .ia-card-barra { height:6px;background:var(--border);border-radius:3px;margin-top:8px;overflow:hidden; }
+  .ia-card-barra > div { height:100%;background:#15803d; }
+  .ia-card-acoes { display:flex;flex-wrap:wrap;gap:6px;margin-top:8px; }
+  .ia-card-acoes button { font-size:12px;padding:4px 10px;border-radius:6px; }
+  .ia-followups { display:flex;flex-wrap:wrap;gap:6px;margin-left:42px; }
+  .ia-followups button { font-size:12px;padding:4px 10px;border-radius:20px; }
 </style>
 
 <script>
@@ -207,6 +231,90 @@ function addBubble(role, content, isTyping) {
   return wrap;
 }
 
+// Cards de demanda/disciplina devolvidos pelo /api/ia/chat — montados com
+// textContent (nome de disciplina vem do banco, nunca vira HTML).
+function el(tag, cls, texto) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (texto) e.textContent = texto;
+  return e;
+}
+
+function perguntar(texto) {
+  const input = document.getElementById('msg-input');
+  input.value = texto;
+  enviarMensagem();
+}
+
+function addFollowups(lista) {
+  const box = el('div', 'ia-followups');
+  lista.forEach(t => {
+    const b = el('button', 'btn btn-secondary', t);
+    b.onclick = () => perguntar(t);
+    box.appendChild(b);
+  });
+  document.getElementById('chat-area').appendChild(box);
+  scrollBottom();
+}
+
+function addCards(cards) {
+  const box = el('div', 'ia-cards');
+  cards.forEach(c => {
+    const card = el('div', 'ia-card');
+    card.style.setProperty('--cor', c.cor || '#a1a1aa');
+    const topo = el('div', 'ia-card-topo');
+    const titulo = el(c.link ? 'a' : 'span', 'ia-card-titulo', c.titulo);
+    if (c.link) titulo.href = c.link;
+    const badge = el('span', 'ia-card-badge', c.badge || '');
+    topo.append(titulo, badge);
+    card.appendChild(topo);
+    if (c.detalhe) card.appendChild(el('div', 'ia-card-detalhe', c.detalhe));
+    if (c.progresso !== undefined) {
+      const barra = el('div', 'ia-card-barra');
+      const fill = el('div');
+      fill.style.width = c.progresso + '%';
+      barra.appendChild(fill);
+      card.appendChild(barra);
+    }
+    if (c.rodape) card.appendChild(el('div', 'ia-card-rodape', c.rodape));
+    const acoes = el('div', 'ia-card-acoes');
+    (c.acoes || []).forEach(a => {
+      const b = el('button', a.principal ? 'btn btn-primary' : 'btn btn-secondary', a.label);
+      b.onclick = () => executarAcao(a, card, badge, c.titulo);
+      acoes.appendChild(b);
+    });
+    (c.perguntas || []).forEach(t => {
+      const b = el('button', 'btn btn-secondary', t);
+      b.onclick = () => perguntar(t);
+      acoes.appendChild(b);
+    });
+    if (acoes.children.length) card.appendChild(acoes);
+    box.appendChild(card);
+  });
+  document.getElementById('chat-area').appendChild(box);
+  scrollBottom();
+}
+
+async function executarAcao(acao, card, badge, titulo) {
+  if (!confirm(`Marcar "${titulo}" como "${acao.label}"?`)) return;
+  const botoes = card.querySelectorAll('.ia-card-acoes button');
+  botoes.forEach(b => b.disabled = true);
+  const form = new FormData();
+  form.append('status', acao.status);
+  try {
+    // a rota responde com redirect pro Calendário — não precisa segui-lo
+    const resp = await fetch(acao.url, {method: 'POST', body: form, redirect: 'manual'});
+    if (resp.type !== 'opaqueredirect' && !resp.ok) throw new Error(resp.status);
+    badge.textContent = '✓ ' + acao.label;
+    badge.style.background = '#15803d';
+    card.classList.add('feito');
+    card.querySelector('.ia-card-acoes').remove();
+  } catch (e) {
+    botoes.forEach(b => b.disabled = false);
+    alert('Não foi possível atualizar. Tente pelo Calendário.');
+  }
+}
+
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
@@ -276,6 +384,8 @@ async function enviarMensagem() {
     } else {
       addBubble('assistant', data.resposta);
       historico.push({role: 'assistant', content: data.resposta});
+      if (data.cards && data.cards.length) addCards(data.cards);
+      if (data.sugestoes && data.sugestoes.length) addFollowups(data.sugestoes);
     }
   } catch(e) {
     typing.remove();
