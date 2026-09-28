@@ -11,6 +11,7 @@
     <button onclick="limparChat()" class="btn btn-secondary" style="font-size:12px">
       Limpar conversa
     </button>
+    {% if session.role == 'admin' %}<a class="btn btn-secondary" href="{{ url_for('revisao_teams') }}">Revisão do Teams</a>{% endif %}
   </div>
 
   <!-- ÁREA DO CHAT -->

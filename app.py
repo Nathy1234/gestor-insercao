@@ -53,8 +53,8 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.20.1'
-NO_AR_DESDE = '22/05/2026'
+VERSAO = '1.20.2'
+NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
 def inject_versao():
@@ -1007,6 +1007,23 @@ class DemandaAlertaDispensa(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     __table_args__ = (db.UniqueConstraint('demanda_id', 'user_id', name='uq_demanda_alerta_dispensa'),)
+
+class RevisaoTeams(db.Model):
+    """Sugestões trazidas sob demanda; nenhuma mensagem altera o calendário sozinha."""
+    id = db.Column(db.Integer, primary_key=True)
+    mensagem_id = db.Column(db.String(80), nullable=False, unique=True)
+    titulo = db.Column(db.String(300), nullable=False)
+    situacao = db.Column(db.String(120), nullable=False)
+    solicitado_em = db.Column(db.DateTime, nullable=False)
+    resposta_em = db.Column(db.DateTime)
+    link = db.Column(db.String(1000), nullable=False)
+    evidencia = db.Column(db.Text)
+    demanda_id = db.Column(db.Integer, db.ForeignKey('demanda.id'))
+    disciplina_id = db.Column(db.Integer, db.ForeignKey('disciplina_modulo.id'))
+    status_aplicado = db.Column(db.String(30))
+    decisao = db.Column(db.String(20), default='pendente')
+    revisado_em = db.Column(db.DateTime)
+
 
 class LembreteFixo(db.Model):
     """Lembrete mensal fixo e pessoal (ex: "todo dia 5 eu faço X") — cada
@@ -3892,6 +3909,129 @@ def _ia_consulta_calendario(p, u, _contem, _norm):
 def ia_assistente():
     cursos_amostra = Course.query.filter(Course.status != 'descontinuado').order_by(Course.nome).limit(20).all()
     return render_template('ia_assistente.html', cursos_amostra=cursos_amostra)
+
+
+@app.route('/ia-assistente/revisao-teams')
+@admin_required
+def revisao_teams():
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+    itens = RevisaoTeams.query.order_by(RevisaoTeams.solicitado_em.desc()).limit(300).all()
+    demandas = Demanda.query.filter(Demanda.status != 'finalizado').order_by(Demanda.titulo).all()
+    disciplinas = DisciplinaModulo.query.filter_by(arquivado=False).order_by(DisciplinaModulo.nome).all()
+    fuso = ZoneInfo('America/Sao_Paulo')
+    hoje = datetime.now(fuso).date()
+    for item in itens:
+        item.inicio_local = item.solicitado_em.replace(tzinfo=timezone.utc).astimezone(fuso).date()
+        item.resposta_local = (item.resposta_em.replace(tzinfo=timezone.utc).astimezone(fuso).date()
+                               if item.resposta_em else None)
+    resumo = {s: sum(i.situacao == s and i.decisao == 'pendente' for i in itens)
+              for s in ('sem resposta da equipe', 'sugestão de conclusão')}
+    palavras = ('inserid', 'curador', 'faltando', 'aguardando', 'verificar',
+                'atualizad', 'ajustad', 'corrigid', 'concluid', 'finalizad')
+    frequencia = {p: sum(p in (i.evidencia or '').lower() for i in itens) for p in palavras}
+    return render_template('revisao_teams.html', itens=itens, demandas=demandas, disciplinas=disciplinas,
+                           hoje=hoje, resumo=resumo, frequencia=frequencia)
+
+
+@app.route('/ia-assistente/revisao-teams/importar', methods=['POST'])
+@admin_required
+def revisao_teams_importar():
+    """Recebe um resumo JSON produzido sob demanda, sem credenciais do Teams."""
+    from urllib.parse import urlsplit
+    arquivo = request.files.get('arquivo')
+    if not arquivo:
+        flash('Selecione o resumo JSON para importar.', 'danger')
+        return redirect(url_for('revisao_teams'))
+    conteudo = arquivo.read(1024 * 1024 + 1)
+    if len(conteudo) > 1024 * 1024:
+        flash('O resumo precisa ter até 1 MB.', 'danger')
+        return redirect(url_for('revisao_teams'))
+    try:
+        itens = json.loads(conteudo)
+        if not isinstance(itens, list) or len(itens) > 300:
+            raise ValueError('Formato inválido')
+        preparados = []
+        for item in itens:
+            identificador = str(item['message_id'])
+            titulo = str(item['titulo']).strip()
+            link = str(item['url'])
+            if not identificador.isdigit() or not titulo or urlsplit(link).scheme != 'https' or urlsplit(link).hostname != 'teams.microsoft.com':
+                raise ValueError('Mensagem ou link inválido')
+            inicio = datetime.fromisoformat(item['created_at'].replace('Z', '+00:00'))
+            ultima = item.get('ultima_resposta_em')
+            resposta = datetime.fromisoformat(ultima.replace('Z', '+00:00')) if ultima else None
+            preparados.append((identificador, titulo[:300], str(item['estado'])[:120],
+                               inicio.replace(tzinfo=None), resposta.replace(tzinfo=None) if resposta else None,
+                               link[:1000], str(item.get('evidencia') or '')[:2000]))
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        flash('Resumo inválido. Confira o arquivo antes de importar.', 'danger')
+        return redirect(url_for('revisao_teams'))
+    for identificador, titulo, situacao, inicio, resposta, link, evidencia in preparados:
+        registro = RevisaoTeams.query.filter_by(mensagem_id=identificador).first()
+        if registro and registro.decisao != 'pendente':
+            continue
+        if not registro:
+            registro = RevisaoTeams(mensagem_id=identificador)
+            db.session.add(registro)
+        registro.titulo, registro.situacao, registro.solicitado_em = titulo, situacao, inicio
+        registro.resposta_em, registro.link, registro.evidencia = resposta, link, evidencia
+    db.session.commit()
+    flash(f'{len(preparados)} mensagens conferidas para revisão.', 'success')
+    return redirect(url_for('revisao_teams'))
+
+
+@app.route('/ia-assistente/revisao-teams/<int:id>/decidir', methods=['POST'])
+@admin_required
+def revisao_teams_decidir(id):
+    item = RevisaoTeams.query.get_or_404(id)
+    if item.decisao != 'pendente':
+        flash('Esta sugestão já foi analisada.', 'danger')
+        return redirect(url_for('revisao_teams'))
+    acao = request.form.get('acao')
+    if acao == 'concluir':
+        if item.situacao != 'sugestão de conclusão':
+            flash('Esta resposta não confirma todas as etapas. Revise no Teams.', 'danger')
+            return redirect(url_for('revisao_teams'))
+        alvo = request.form.get('alvo', '')
+        tipo, _, numero = alvo.partition(':')
+        if not numero.isdigit():
+            flash('Selecione um item do calendário.', 'danger')
+            return redirect(url_for('revisao_teams'))
+        if tipo == 'demanda':
+            demanda = Demanda.query.get(int(numero))
+            if not demanda or demanda.status == 'finalizado':
+                flash('Selecione uma demanda em aberto.', 'danger')
+                return redirect(url_for('revisao_teams'))
+            demanda.status = 'finalizado'
+            item.demanda_id = demanda.id
+            item.status_aplicado = 'finalizado'
+            log_action(session['user_id'], session['username'], 'editar', 'demanda', demanda.id,
+                       f'finalizado após confirmação humana; Teams {item.mensagem_id}')
+        elif tipo == 'disciplina':
+            disciplina = DisciplinaModulo.query.get(int(numero))
+            etapa = request.form.get('etapa')
+            if not disciplina or disciplina.arquivado or etapa not in ('inserida', 'liberada_moodle', 'liberada_inova'):
+                flash('Selecione uma disciplina ativa e a etapa correta.', 'danger')
+                return redirect(url_for('revisao_teams'))
+            disciplina.status = etapa
+            disciplina.status_em = datetime.utcnow()
+            item.disciplina_id = disciplina.id
+            item.status_aplicado = etapa
+            log_action(session['user_id'], session['username'], 'editar', 'disciplina_modulo', disciplina.id,
+                       f'{etapa} após confirmação humana; Teams {item.mensagem_id}')
+        else:
+            flash('Selecione uma demanda ou disciplina.', 'danger')
+            return redirect(url_for('revisao_teams'))
+        item.decisao = 'concluido'
+    elif acao == 'manter':
+        item.decisao = 'mantido'
+    else:
+        flash('Escolha Concluir ou Manter pendente.', 'danger')
+        return redirect(url_for('revisao_teams'))
+    item.revisado_em = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for('revisao_teams'))
 
 
 @app.route('/api/ia/chat', methods=['POST'])

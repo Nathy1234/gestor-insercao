@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% block title %}Revisão do Teams — Gestor{% endblock %}
+{% block content %}
+<div class="page" style="max-width:1100px;margin:auto">
+  <div class="page-header"><div>
+    <div class="page-title">Revisão do Teams</div>
+    <div class="page-subtitle">Mensagens do canal Inserção de Materiais, conferidas por você antes de atualizar o calendário.</div>
+  </div></div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;margin:18px 0">
+    <div class="card" style="padding:16px;min-width:170px"><strong>{{ resumo.get('sugestão de conclusão', 0) }}</strong><br>Sugestões para revisar</div>
+    <div class="card" style="padding:16px;min-width:170px"><strong>{{ resumo.get('sem resposta da equipe', 0) }}</strong><br>Sem resposta da equipe</div>
+    <div class="card" style="padding:16px;min-width:170px"><strong>{{ itens|selectattr('decisao', 'equalto', 'pendente')|list|length }}</strong><br>Total aguardando análise</div>
+  </div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <strong>Expressões nas respostas importadas</strong>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      {% for palavra, qtd in frequencia.items() if qtd %}<span style="border:1px solid var(--border);border-radius:16px;padding:4px 10px">{{ palavra }}*: {{ qtd }}</span>{% endfor %}
+    </div>
+    <small>Uma resposta pode aparecer em mais de uma categoria.</small>
+  </div>
+  <div class="card" style="padding:18px;margin-bottom:20px">
+    <h3 style="margin:0 0 8px">Atualizar resumo</h3>
+    <p style="margin:0 0 12px">Importe o arquivo JSON preparado pelo assistente nesta conversa. O Gestor não lê o Teams sozinho.</p>
+    <form method="post" action="{{ url_for('revisao_teams_importar') }}" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="arquivo" accept=".json,application/json" required>
+      <button class="btn btn-primary" type="submit">Importar resumo</button>
+    </form>
+  </div>
+  {% for item in itens if item.decisao == 'pendente' %}
+    <div class="card" style="padding:18px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <strong>{{ item.titulo }}</strong>
+        <span>{{ item.situacao }}</span>
+      </div>
+      <p style="margin:8px 0">Solicitada em {{ item.inicio_local.strftime('%d/%m/%Y') }} ·
+        {% if item.resposta_em %}Última resposta em {{ item.resposta_local.strftime('%d/%m/%Y') }}{% else %}
+        {{ (hoje - item.inicio_local).days }} dia(s) sem resposta{% endif %}</p>
+      {% if item.evidencia %}<p style="white-space:pre-wrap">{{ item.evidencia }}</p>{% endif %}
+      <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Ver publicação no Teams</a>
+      <form method="post" action="{{ url_for('revisao_teams_decidir', id=item.id) }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if item.situacao == 'sugestão de conclusão' %}
+          <label for="alvo-{{ item.id }}">Item do calendário:</label>
+          <select id="alvo-{{ item.id }}" name="alvo" style="max-width:400px">
+            <option value="">Escolha após conferir a mensagem</option>
+            <optgroup label="Demandas">{% for d in demandas %}<option value="demanda:{{ d.id }}">{{ d.titulo }}</option>{% endfor %}</optgroup>
+            <optgroup label="Disciplinas">{% for d in disciplinas %}<option value="disciplina:{{ d.id }}">{{ d.nome }} — {{ d.modulo }}{% if d.submodulo %} / {{ d.submodulo }}{% endif %}</option>{% endfor %}</optgroup>
+          </select>
+          <label for="etapa-{{ item.id }}">Se for disciplina:</label>
+          <select id="etapa-{{ item.id }}" name="etapa">
+            <option value="inserida">Inserida</option>
+            <option value="liberada_moodle">Liberada no Moodle</option>
+            <option value="liberada_inova">Liberada no Inova</option>
+          </select>
+          <button class="btn btn-primary" name="acao" value="concluir" type="submit">Confirmar conclusão</button>
+        {% endif %}
+        <button class="btn btn-secondary" name="acao" value="manter" type="submit">Manter pendente</button>
+      </form>
+    </div>
+  {% else %}<p>Não há sugestões pendentes de revisão.</p>{% endfor %}
+</div>
+{% endblock %}
