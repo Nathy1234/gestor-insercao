@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.20.0'
+VERSAO = '1.20.1'
 NO_AR_DESDE = '22/05/2026'
 
 @app.context_processor
@@ -583,7 +583,14 @@ class User(db.Model):
         return self._modulo_ok('banco_disciplinas', 'block_banco_disciplinas')
 
     def can_view_ia_assistente(self):
-        return self._modulo_ok('ia_assistente', 'block_ia_assistente')
+        """Igual aos outros módulos, mais uma exceção: com o IA Assistente
+        "só admin" em Visibilidade, quem tiver 'liberar_ia_assistente'
+        marcado na tela do usuário também enxerga — dá pra escolher pessoa
+        por pessoa quem usa."""
+        if self._modulo_ok('ia_assistente', 'block_ia_assistente'):
+            return True
+        p = self._p()
+        return bool(p.get('liberar_ia_assistente')) and not p.get('block_ia_assistente')
 
     def can_view_ferramentas(self):
         return self._modulo_ok('ferramentas', 'block_ferramentas')
@@ -4889,7 +4896,7 @@ def _perms_from_form(d):
     keys = [
         'cursos_editar', 'cursos_excluir',
         'historico_ver', 'usuarios_gerenciar', 'backup_gerenciar',
-        'erp_moodle_acesso',
+        'erp_moodle_acesso', 'liberar_ia_assistente',
         'block_historico', 'block_trocar_senha',
         'block_cursos', 'block_matrizes', 'block_banco_disciplinas',
         'block_ia_assistente', 'block_ferramentas',

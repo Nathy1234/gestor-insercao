@@ -167,6 +167,12 @@
               {% elif user and user.get_perm('erp_moodle_acesso') %}checked{% endif %}>
             <div><div class="perm-name">Acessar ERP Moodle</div><div class="perm-desc">Ver a tela de acompanhamento de inserção de conteúdo — categoria separada do INOVA, para a equipe de inserção de materiais</div></div>
           </label>
+          <label class="perm-item">
+            <input type="checkbox" name="perm_liberar_ia_assistente" form="userForm"
+              {% if user and user.role=='admin' %}checked disabled
+              {% elif user and user._p().get('liberar_ia_assistente') %}checked{% endif %}>
+            <div><div class="perm-name">Liberar IA Assistente</div><div class="perm-desc">Mostra o IA Assistente pra esta conta mesmo quando ele está "só admin" em Visibilidade — assim você escolhe pessoa por pessoa quem usa</div></div>
+          </label>
         </div>
         <div style="font-size:11px;color:var(--text-muted);padding:0 16px 10px">
           Cupons, Reembolsos, Pagamentos Terceiros e Opções de Curso são
@@ -290,7 +296,7 @@ function marcarTrocaSenha(userId, username) {
 const EDITOR_DEFAULTS = {
   cursos_editar: true, cursos_excluir: false,
   historico_ver: true, usuarios_gerenciar: false, backup_gerenciar: false,
-  erp_moodle_acesso: false,
+  erp_moodle_acesso: false, liberar_ia_assistente: false,
   block_historico: false,
   block_cursos: false, block_matrizes: false, block_banco_disciplinas: false,
   block_ia_assistente: false, block_ferramentas: false,
