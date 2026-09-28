@@ -53,7 +53,7 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
 app = Flask(__name__)
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.20.2'
+VERSAO = '1.20.3'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -3925,8 +3925,12 @@ def revisao_teams():
         item.inicio_local = item.solicitado_em.replace(tzinfo=timezone.utc).astimezone(fuso).date()
         item.resposta_local = (item.resposta_em.replace(tzinfo=timezone.utc).astimezone(fuso).date()
                                if item.resposta_em else None)
-    resumo = {s: sum(i.situacao == s and i.decisao == 'pendente' for i in itens)
-              for s in ('sem resposta da equipe', 'sugestão de conclusão')}
+    resumo = {
+        'sugestão de conclusão': sum(i.situacao == 'sugestão de conclusão' and i.decisao == 'pendente'
+                                    for i in itens),
+        'sem confirmação': sum(i.situacao != 'sugestão de conclusão' and i.decisao == 'pendente'
+                                for i in itens),
+    }
     palavras = ('inserid', 'curador', 'faltando', 'aguardando', 'verificar',
                 'atualizad', 'ajustad', 'corrigid', 'concluid', 'finalizad')
     frequencia = {p: sum(p in (i.evidencia or '').lower() for i in itens) for p in palavras}

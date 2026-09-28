@@ -8,7 +8,7 @@
   </div></div>
   <div style="display:flex;gap:12px;flex-wrap:wrap;margin:18px 0">
     <div class="card" style="padding:16px;min-width:170px"><strong>{{ resumo.get('sugestão de conclusão', 0) }}</strong><br>Sugestões para revisar</div>
-    <div class="card" style="padding:16px;min-width:170px"><strong>{{ resumo.get('sem resposta da equipe', 0) }}</strong><br>Sem resposta da equipe</div>
+    <div class="card" style="padding:16px;min-width:170px"><strong>{{ resumo.get('sem confirmação', 0) }}</strong><br>Sem confirmação de conclusão</div>
     <div class="card" style="padding:16px;min-width:170px"><strong>{{ itens|selectattr('decisao', 'equalto', 'pendente')|list|length }}</strong><br>Total aguardando análise</div>
   </div>
   <div class="card" style="padding:16px;margin-bottom:16px">
@@ -35,7 +35,8 @@
       </div>
       <p style="margin:8px 0">Solicitada em {{ item.inicio_local.strftime('%d/%m/%Y') }} ·
         {% if item.resposta_em %}Última resposta em {{ item.resposta_local.strftime('%d/%m/%Y') }}{% else %}
-        {{ (hoje - item.inicio_local).days }} dia(s) sem resposta{% endif %}</p>
+        {{ (hoje - item.inicio_local).days }} dia(s) desde o pedido ·
+        {% if item.situacao == 'respostas não verificadas no recorte recente' %}respostas anteriores não verificadas{% else %}sem resposta registrada neste resumo{% endif %}{% endif %}</p>
       {% if item.evidencia %}<p style="white-space:pre-wrap">{{ item.evidencia }}</p>{% endif %}
       <a href="{{ item.link }}" target="_blank" rel="noopener noreferrer">Ver publicação no Teams</a>
       <form method="post" action="{{ url_for('revisao_teams_decidir', id=item.id) }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px">
