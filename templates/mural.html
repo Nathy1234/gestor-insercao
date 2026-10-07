@@ -11,6 +11,7 @@
 
   <div class="mural-tabs">
     <a href="{{ url_for('mural') }}" class="mural-tab {% if aba == 'publico' %}active{% endif %}">💬 Mural</a>
+    <a href="{{ url_for('mural', aba='log') }}" class="mural-tab {% if aba == 'log' %}active{% endif %}">📋 Log externo</a>
     {% for c in conversas %}
     <a href="{{ url_for('mural', aba=c.id) }}" class="mural-tab {% if contato and contato.id == c.id %}active{% endif %}">🔒 {{ c|nome_exibicao }}</a>
     {% endfor %}
@@ -116,6 +117,39 @@
     {% endfor %}
   </div>
 
+  {% elif aba == 'log' %}
+  <div class="card" style="margin-bottom:16px"><div class="card-body">
+    <strong>Novidades externas da equipe</strong>
+    <p style="color:var(--text-muted);font-size:13px;margin-top:8px">Novidades dos grupos e canais do Teams e alterações nas planilhas monitoradas. Atividades do próprio Gestor e conversas entre duas pessoas ficam fora deste log.</p>
+    {% if saude.get('verificado_em') %}
+    <p style="font-size:12px">Última verificação externa: {{ saude.verificado_em|horario_log_externo }} · {{ saude.get('fontes_verificadas', 0) }} fontes verificadas.</p>
+    {% if saude.get('falhas') %}
+    <p style="color:#b45309;font-size:12px">Algumas fontes não puderam ser verificadas nesta execução:</p>
+    <ul style="font-size:12px">{% for falha in saude.falhas %}<li>{{ falha }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% else %}
+    <p style="color:#b45309;font-size:12px">A sincronização de Teams e planilhas ainda não realizou uma verificação.</p>
+    {% endif %}
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('mural', aba='log', pagina=pagina) }}">Atualizar log</a>
+  </div></div>
+  <div style="display:flex;flex-direction:column;gap:10px">
+    {% for evento in eventos %}
+    <article class="card"><div class="card-body" style="padding:14px 16px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:13px">
+        <strong>{{ evento.autor }}</strong><span>{{ evento.fonte }} · {{ evento.origem }}</span>
+        <time style="color:var(--text-muted)">{{ evento.ocorrido_em|horario_log_externo }}</time>
+      </div>
+      <div style="white-space:pre-wrap;word-break:break-word;font-size:13px;margin-top:8px">{{ evento.texto }}</div>
+      {% if evento.link %}<a href="{{ evento.link }}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Abrir na origem ↗</a>{% endif %}
+    </div></article>
+    {% else %}
+    <div class="card"><div class="card-body" style="text-align:center;color:var(--text-muted)">Nenhuma atividade registrada.</div></div>
+    {% endfor %}
+  </div>
+  <nav style="display:flex;gap:12px;margin-top:16px" aria-label="Páginas do log">
+    {% if pagina > 1 %}<a href="{{ url_for('mural', aba='log', pagina=pagina-1) }}">← Anterior</a>{% endif %}
+    {% if tem_proxima %}<a href="{{ url_for('mural', aba='log', pagina=pagina+1) }}">Próxima →</a>{% endif %}
+  </nav>
   {% else %}
   <!-- CONVERSA PRIVADA -->
   <div class="card mural-chat">

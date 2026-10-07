@@ -1,0 +1,33 @@
+name: Log horario do mural
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: mural-log
+  cancel-in-progress: false
+jobs:
+  sincronizar:
+    # Ativar somente depois da primeira execução manual validada no ambiente teste.
+    if: vars.MURAL_SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests==2.32.3 openpyxl==3.1.3
+      - run: python scripts/sincronizar_mural.py
+        env:
+          GESTOR_URL: ${{ vars.GESTOR_URL }}
+          MURAL_SYNC_SECRET: ${{ secrets.MURAL_SYNC_SECRET }}
+          MS_GRAPH_USER_ID: ${{ vars.MS_GRAPH_USER_ID }}
+          MS_GRAPH_TENANT_ID: ${{ vars.MS_GRAPH_TENANT_ID }}
+          MS_GRAPH_CLIENT_ID: ${{ vars.MS_GRAPH_CLIENT_ID }}
+          MS_GRAPH_CLIENT_SECRET: ${{ secrets.MS_GRAPH_CLIENT_SECRET }}
+          MS_GRAPH_REFRESH_TOKEN: ${{ secrets.MS_GRAPH_REFRESH_TOKEN }}
+          MURAL_SPREADSHEETS_JSON: ${{ vars.MURAL_SPREADSHEETS_JSON }}
+          MURAL_SYNC_START: ${{ vars.MURAL_SYNC_START }}
