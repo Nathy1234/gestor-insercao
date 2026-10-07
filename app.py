@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, date, timezone
 from functools import wraps
 import hashlib, os, secrets, shutil, json, threading, time, io, zipfile, unicodedata as _ucd, re as _re, calendar as _calendar, difflib as _difflib
 import requests as _requests
+from mural_log import validar_evento
+from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import icalendar as _icalendar
 import recurring_ical_events as _recurring_ical_events
@@ -51,6 +53,15 @@ for _chave in ('ANTHROPIC_API_KEY', 'EMAIL_SMTP_USER', 'EMAIL_SMTP_PASSWORD'):
             os.environ[_chave] = _val
 
 app = Flask(__name__)
+
+@app.template_filter('horario_log_externo')
+def horario_log_externo(valor):
+    if isinstance(valor, str):
+        valor = datetime.fromisoformat(valor.replace('Z', '+00:00'))
+    if valor.tzinfo is None:
+        valor = valor.replace(tzinfo=timezone.utc)
+    return valor.astimezone(ZoneInfo('America/Sao_Paulo')).strftime('%d/%m/%Y %H:%M')
+
 
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
 VERSAO = '1.22.1'
@@ -728,6 +739,27 @@ class AuditLog(db.Model):
     entity_id  = db.Column(db.Integer)
     detail     = db.Column(db.Text)         # JSON do que mudou
     timestamp  = db.Column(db.DateTime, default=datetime.utcnow)
+
+class MuralEvento(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    chave = db.Column(db.String(64), nullable=False, unique=True)
+    fonte = db.Column(db.String(30), nullable=False)
+    autor = db.Column(db.String(200), nullable=False)
+    origem = db.Column(db.String(300), nullable=False)
+    texto = db.Column(db.Text, nullable=False)
+    link = db.Column(db.Text, nullable=False, default='')
+    ocorrido_em = db.Column(db.DateTime, nullable=False, index=True)
+    registrado_em = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class MuralSyncState(db.Model):
+    chave = db.Column(db.String(200), primary_key=True)
+    valor = db.Column(db.Text, nullable=False)
+
+# Somente o backend autenticado acessa estas tabelas. Não expor pela Data API.
+from sqlalchemy import event as _sa_event, DDL as _DDL
+for _tabela_mural in (MuralEvento.__table__, MuralSyncState.__table__):
+    _sa_event.listen(_tabela_mural, 'after_create',
+                     _DDL('ALTER TABLE %(fullname)s ENABLE ROW LEVEL SECURITY').execute_if(dialect='postgresql'))
 
 class Coupon(db.Model):
     id           = db.Column(db.Integer, primary_key=True)
@@ -5200,7 +5232,7 @@ MURAL_LOG_ORIGENS = {'planilha': '📊 Planilha', 'teams': '💼 Teams', 'outro'
 MURAL_LOG_PERIODOS = [1, 7, 30, 90]
 
 def _mural_log_linhas(dias):
-    """Linha do tempo da aba Logs: só os registros manuais (MuralLog) da
+    """Linha do tempo da aba Logs: registros externos manuais e automáticos da
     equipe — o que foi feito fora do sistema (planilha, Teams etc.). As
     alterações feitas dentro do sistema ficam no Histórico, não aqui."""
     desde = datetime.utcnow() - timedelta(days=dias)
@@ -5210,7 +5242,15 @@ def _mural_log_linhas(dias):
                        'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
                        'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id,
                        'quando_br': r.created_at.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if r.created_at else None})
-    return linhas
+    for e in MuralEvento.query.filter(MuralEvento.ocorrido_em >= desde).order_by(MuralEvento.ocorrido_em.desc()).limit(1000):
+        origem = 'planilha' if e.fonte == 'planilha' else 'teams'
+        linhas.append({'quando': e.ocorrido_em, 'quem': e.autor,
+                       'origem': origem, 'rotulo': MURAL_LOG_ORIGENS[origem],
+                       'texto': f'{e.origem}\n{e.texto}', 'link': e.link,
+                       'id': None, 'user_id': None,
+                       'quando_br': e.ocorrido_em.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ)})
+    linhas.sort(key=lambda l: l['quando'], reverse=True)
+    return linhas[:1000]
 
 def _mural_log_texto(linhas, dias):
     """Versão em texto puro da linha do tempo, pra colar/enviar pro ChatGPT."""
@@ -5236,13 +5276,17 @@ def mural():
     u = User.query.get(session['user_id'])
     aba = request.args.get('aba', 'publico')
     contato = None
+    if aba == 'log':
+        aba = 'logs'
     if aba == 'logs':
+        estado = db.session.get(MuralSyncState, 'saude')
+        saude = json.loads(estado.valor) if estado else {}
         dias = _mural_log_dias()
         linhas = _mural_log_linhas(dias)
         return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
                                todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
                                log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
-                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS)
+                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS, saude=saude)
     if aba != 'publico':
         contato = User.query.get(aba) if aba.isdigit() else None
         if not contato or contato.id == u.id:
@@ -5269,6 +5313,59 @@ def mural():
     return render_template('mural.html', mensagens=mensagens, emojis=EMOJIS_MURAL,
                            reacoes_por_msg=reacoes_por_msg, minhas_reacoes=minhas_reacoes,
                            aba=aba, contato=contato, conversas=conversas, todos_usuarios=todos_usuarios)
+
+@app.route('/api/mural/sincronizacao', methods=['GET', 'POST'])
+@csrf.exempt
+def mural_sincronizacao():
+    """Ponte exclusiva do coletor. CSRF não se aplica a autenticação Bearer."""
+    segredo = os.environ.get('MURAL_SYNC_SECRET', '')
+    dono = os.environ.get('MS_GRAPH_USER_ID', '')
+    recebido = request.headers.get('Authorization', '')
+    if len(segredo) < 32 or not dono or not secrets.compare_digest(recebido, f'Bearer {segredo}'):
+        return jsonify(erro='Sincronização não autorizada.'), 401
+    if request.method == 'GET':
+        return jsonify(estados={s.chave: json.loads(s.valor) for s in MuralSyncState.query.all()})
+    if request.content_length is None or request.content_length > 32 * 1024 * 1024:
+        return jsonify(erro='Lote excedeu o limite.'), 413
+    lote = request.get_json(silent=True)
+    try:
+        if not isinstance(lote, dict) or lote.get('dono') != dono:
+            raise ValueError('Titular inválida.')
+        eventos = lote.get('eventos', [])
+        estados = lote.get('estados', {})
+        if not isinstance(eventos, list) or len(eventos) > 1000 or not isinstance(estados, dict):
+            raise ValueError('Lote inválido.')
+        validados = [validar_evento(e, dono) for e in eventos]
+        if any(not isinstance(k, str) or len(k) > 200 for k in estados):
+            raise ValueError('Estado inválido.')
+        serializados = {k: json.dumps(v, ensure_ascii=False) for k, v in estados.items()}
+    except (ValueError, KeyError, TypeError):
+        return jsonify(erro='Evento inválido ou fora do escopo permitido.'), 400
+    from sqlalchemy.exc import IntegrityError
+    novos = 0
+    try:
+        for e in validados:
+            try:
+                with db.session.begin_nested():
+                    db.session.add(MuralEvento(**e))
+                    db.session.flush()
+                novos += 1
+            except IntegrityError:
+                # Unique(chave) torna reenvios e execuções concorrentes idempotentes.
+                if not MuralEvento.query.filter_by(chave=e['chave']).first():
+                    raise
+        for chave, valor in serializados.items():
+            estado = db.session.get(MuralSyncState, chave)
+            if estado:
+                estado.valor = valor
+            else:
+                db.session.add(MuralSyncState(chave=chave, valor=valor))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception('Falha na gravação do log do mural')
+        return jsonify(erro='Não foi possível registrar o lote. Tente novamente.'), 500
+    return jsonify(ok=True, novos=novos)
 
 def _notificar_mencao_mural(mensagem):
     """Manda um e-mail pra quem recebeu a mensagem privada — só dispara nesse
