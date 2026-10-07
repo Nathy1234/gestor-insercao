@@ -29,7 +29,7 @@ class LogTest(unittest.TestCase):
         self.client = gestor.app.test_client()
         self.headers = {'Authorization': 'Bearer ' + 's' * 40}
         with gestor.app.app_context():
-            for model in (gestor.MuralEvento, gestor.MuralSyncState, gestor.MuralMensagem, gestor.AuditLog, gestor.User):
+            for model in (gestor.MuralEvento, gestor.MuralSyncState, gestor.MuralLog, gestor.MuralMensagem, gestor.AuditLog, gestor.User):
                 gestor.db.session.query(model).delete()
             gestor.db.session.add(gestor.User(id=1, username='Equipe', password=gestor.hash_pw('senha-teste'), role='admin'))
             gestor.db.session.commit()
@@ -95,6 +95,19 @@ class LogTest(unittest.TestCase):
 
     def test_acesso_ao_log_exige_login(self):
         self.assertEqual(self.client.get('/mural?aba=log').status_code, 302)
+
+    def test_exportacao_preserva_manuais_e_externos_sem_cadastro(self):
+        e = self.evento()
+        e['texto'] = 'Curso sem cadastro recebeu materiais no Teams'
+        self.post([e])
+        with gestor.app.app_context():
+            gestor.db.session.add(gestor.MuralLog(user_id=1, origem='planilha', texto='Registro manual externo'))
+            gestor.db.session.commit()
+        with self.client.session_transaction() as s:
+            s['user_id'], s['username'], s['role'] = 1, 'Equipe', 'admin'
+        texto = self.client.get('/mural/logs.txt?dias=90').get_data(as_text=True)
+        self.assertIn('Curso sem cadastro', texto)
+        self.assertIn('Registro manual externo', texto)
 
     def test_links_nao_executam_javascript(self):
         e = self.evento(link='javascript:alert(1)')

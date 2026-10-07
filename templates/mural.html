@@ -11,7 +11,7 @@
 
   <div class="mural-tabs">
     <a href="{{ url_for('mural') }}" class="mural-tab {% if aba == 'publico' %}active{% endif %}">💬 Mural</a>
-    <a href="{{ url_for('mural', aba='log') }}" class="mural-tab {% if aba == 'log' %}active{% endif %}">📋 Log externo</a>
+    <a href="{{ url_for('mural', aba='logs') }}" class="mural-tab {% if aba == 'logs' %}active{% endif %}">📋 Log externo</a>
     {% for c in conversas %}
     <a href="{{ url_for('mural', aba=c.id) }}" class="mural-tab {% if contato and contato.id == c.id %}active{% endif %}">🔒 {{ c|nome_exibicao }}</a>
     {% endfor %}
@@ -25,7 +25,76 @@
     </select>
   </div>
 
-  {% if aba == 'publico' %}
+  {% if aba == 'logs' %}
+  <div class="card" style="margin-bottom:16px"><div class="card-body">
+    <strong>Novidades externas da equipe</strong>
+    <p style="color:var(--text-muted);font-size:13px;margin-top:8px">Novidades dos grupos e canais do Teams e alterações nas planilhas monitoradas. Atividades do próprio Gestor e conversas entre duas pessoas ficam fora deste log.</p>
+    {% if saude.get('verificado_em') %}
+    <p style="font-size:12px">Última verificação externa: {{ saude.verificado_em|horario_log_externo }} · {{ saude.get('fontes_verificadas', 0) }} fontes verificadas.</p>
+    {% if saude.get('falhas') %}
+    <p style="color:#b45309;font-size:12px">Algumas fontes não puderam ser verificadas nesta execução:</p>
+    <ul style="font-size:12px">{% for falha in saude.falhas %}<li>{{ falha }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% else %}
+    <p style="color:#b45309;font-size:12px">A sincronização de Teams e planilhas ainda não realizou uma verificação.</p>
+    {% endif %}
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('mural', aba='logs', dias=log_dias) }}">Atualizar log</a>
+  </div></div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-body">
+      <form method="POST" action="{{ url_for('mural_log_novo') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <select name="origem" style="flex:0 0 auto">
+            {% for k, v in log_origens.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+          </select>
+          <input type="url" name="link" maxlength="500" placeholder="Link da planilha / conversa no Teams (opcional)" style="flex:1;min-width:200px">
+        </div>
+        <textarea name="texto" rows="2" maxlength="2000" required style="width:100%;resize:vertical"
+                  placeholder="O que você atualizou? Ex.: Atualizei a planilha de reembolsos com os pedidos de outubro / Combinado no Teams: entrega do curso X fica pra sexta"></textarea>
+        <div style="text-align:right;margin-top:8px">
+          <button type="submit" class="btn btn-primary">Registrar no log</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <span style="font-size:12.5px;color:var(--text-muted)">Período:</span>
+    {% for d in log_periodos %}
+    <a href="{{ url_for('mural', aba='logs', dias=d) }}" class="mural-tab {% if d == log_dias %}active{% endif %}" style="padding:4px 10px">{{ 'Hoje' if d == 1 else d ~ ' dias' }}</a>
+    {% endfor %}
+    <div style="margin-left:auto;display:flex;gap:6px">
+      <button type="button" class="btn btn-secondary" onclick="copiarLogChatGPT(this)">📋 Copiar para o ChatGPT</button>
+      <a href="{{ url_for('mural_logs_txt', dias=log_dias) }}" class="btn btn-secondary">⬇ Baixar .txt</a>
+    </div>
+  </div>
+  <textarea id="logTextoChatGPT" style="display:none">{{ log_texto }}</textarea>
+
+  <div class="card">
+    {% for l in log_linhas %}
+    <div class="log-linha">
+      <span class="log-origem log-origem-{{ l.origem }}">{{ l.rotulo }}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:11.5px;color:var(--text-muted)">
+          <strong style="color:var(--text)">{{ l.quem }}</strong> · {{ l.quando_br.strftime('%d/%m/%Y %H:%M') if l.quando_br else '' }}
+        </div>
+        <div style="font-size:13px;white-space:pre-wrap;word-break:break-word;margin-top:2px">{{ l.texto }}</div>
+        {% if l.link %}<a href="{{ l.link }}" target="_blank" rel="noopener noreferrer" style="font-size:12px;word-break:break-all">🔗 {{ l.link }}</a>{% endif %}
+      </div>
+      {% if l.id and (l.user_id == session.user_id or session.role == 'admin') %}
+      <form method="POST" action="{{ url_for('mural_log_excluir', id=l.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" style="color:#dc2626" data-confirm="Excluir este registro do log?">Excluir</button>
+      </form>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="card-body" style="text-align:center;color:var(--text-muted);padding:32px">Nenhuma atualização nesse período.</div>
+    {% endfor %}
+  </div>
+
+  {% elif aba == 'publico' %}
   <div id="avisoNovasMsgs" style="display:none;margin-bottom:12px">
     <button type="button" class="btn btn-secondary" style="width:100%;justify-content:center;color:var(--primary)" onclick="location.reload()">
       ↻ Tem mensagem nova — clique pra atualizar
@@ -117,39 +186,6 @@
     {% endfor %}
   </div>
 
-  {% elif aba == 'log' %}
-  <div class="card" style="margin-bottom:16px"><div class="card-body">
-    <strong>Novidades externas da equipe</strong>
-    <p style="color:var(--text-muted);font-size:13px;margin-top:8px">Novidades dos grupos e canais do Teams e alterações nas planilhas monitoradas. Atividades do próprio Gestor e conversas entre duas pessoas ficam fora deste log.</p>
-    {% if saude.get('verificado_em') %}
-    <p style="font-size:12px">Última verificação externa: {{ saude.verificado_em|horario_log_externo }} · {{ saude.get('fontes_verificadas', 0) }} fontes verificadas.</p>
-    {% if saude.get('falhas') %}
-    <p style="color:#b45309;font-size:12px">Algumas fontes não puderam ser verificadas nesta execução:</p>
-    <ul style="font-size:12px">{% for falha in saude.falhas %}<li>{{ falha }}</li>{% endfor %}</ul>
-    {% endif %}
-    {% else %}
-    <p style="color:#b45309;font-size:12px">A sincronização de Teams e planilhas ainda não realizou uma verificação.</p>
-    {% endif %}
-    <a class="btn btn-secondary btn-sm" href="{{ url_for('mural', aba='log', pagina=pagina) }}">Atualizar log</a>
-  </div></div>
-  <div style="display:flex;flex-direction:column;gap:10px">
-    {% for evento in eventos %}
-    <article class="card"><div class="card-body" style="padding:14px 16px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:13px">
-        <strong>{{ evento.autor }}</strong><span>{{ evento.fonte }} · {{ evento.origem }}</span>
-        <time style="color:var(--text-muted)">{{ evento.ocorrido_em|horario_log_externo }}</time>
-      </div>
-      <div style="white-space:pre-wrap;word-break:break-word;font-size:13px;margin-top:8px">{{ evento.texto }}</div>
-      {% if evento.link %}<a href="{{ evento.link }}" target="_blank" rel="noopener noreferrer" style="font-size:12px">Abrir na origem ↗</a>{% endif %}
-    </div></article>
-    {% else %}
-    <div class="card"><div class="card-body" style="text-align:center;color:var(--text-muted)">Nenhuma atividade registrada.</div></div>
-    {% endfor %}
-  </div>
-  <nav style="display:flex;gap:12px;margin-top:16px" aria-label="Páginas do log">
-    {% if pagina > 1 %}<a href="{{ url_for('mural', aba='log', pagina=pagina-1) }}">← Anterior</a>{% endif %}
-    {% if tem_proxima %}<a href="{{ url_for('mural', aba='log', pagina=pagina+1) }}">Próxima →</a>{% endif %}
-  </nav>
   {% else %}
   <!-- CONVERSA PRIVADA -->
   <div class="card mural-chat">
@@ -250,9 +286,23 @@
 .btn-reacao:hover { border-color: var(--primary); background: var(--primary-light); }
 .btn-reacao.is-active { border-color: var(--primary); background: var(--primary-light); }
 .reacao-count { font-size: 11px; font-weight: 600; color: var(--text-muted); }
+.log-linha { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.log-linha:last-child { border-bottom: none; }
+.log-origem { flex-shrink: 0; font-size: 10.5px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: var(--surface-2); color: var(--text-muted); white-space: nowrap; }
+.log-origem-planilha { background: #dcfce7; color: #15803d; }
+.log-origem-teams { background: #e0e7ff; color: #4338ca; }
+@media (max-width: 600px) { .log-linha { flex-wrap: wrap; } }
 </style>
 
 <script>
+function copiarLogChatGPT(btn) {
+  const texto = document.getElementById('logTextoChatGPT').value;
+  navigator.clipboard.writeText(texto).then(() => {
+    const original = btn.textContent;
+    btn.textContent = '✓ Copiado!';
+    setTimeout(() => { btn.textContent = original; }, 2000);
+  }, () => showToast('Não foi possível copiar — use o "Baixar .txt".', 'danger'));
+}
 function reagirMural(btn) {
   const msgId = btn.dataset.msgId;
   const emoji = btn.dataset.emoji;

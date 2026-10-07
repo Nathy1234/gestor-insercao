@@ -1,7 +1,8 @@
 # Log da equipe no mural
 
-O mural mantém os recados e conversas existentes e oferece uma aba **Log externo**.
-Ela mostra somente novidades externas: Teams e planilhas monitoradas. Atividades
+O mural mantém os recados e conversas existentes e estende a aba de Logs existente
+com a coleta automática, preservando o registro manual e a exportação para texto.
+A aba **Log externo** mostra somente novidades externas: Teams e planilhas monitoradas. Atividades
 do próprio Gestor não entram nessa aba. Conversas entre duas pessoas também ficam
 fora do log.
 

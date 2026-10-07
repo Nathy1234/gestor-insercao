@@ -13,7 +13,6 @@ import hashlib, os, secrets, shutil, json, threading, time, io, zipfile, unicode
 import requests as _requests
 from mural_log import validar_evento
 from zoneinfo import ZoneInfo
-
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import icalendar as _icalendar
 import recurring_ical_events as _recurring_ical_events
@@ -63,8 +62,9 @@ def horario_log_externo(valor):
         valor = valor.replace(tzinfo=timezone.utc)
     return valor.astimezone(ZoneInfo('America/Sao_Paulo')).strftime('%d/%m/%Y %H:%M')
 
+
 # Versão exibida no rodapé — atualize aqui a cada mudança relevante publicada.
-VERSAO = '1.20.3'
+VERSAO = '1.22.1'
 NO_AR_DESDE = '28/09/2026'
 
 @app.context_processor
@@ -513,6 +513,7 @@ class User(db.Model):
     agenda_cache_json = db.Column(db.Text)  # cache das reuniões já buscadas no link acima, pra não bater na URL a cada carregamento de página
     agenda_cache_em = db.Column(db.DateTime)
     ultimo_login = db.Column(db.DateTime)  # usado pra listar colaboradores inativos e avisar quem voltou
+    ativo        = db.Column(db.Boolean, default=True)  # False = conta desativada: não loga, mas histórico/cursos continuam
     created_at   = db.Column(db.DateTime, default=datetime.utcnow)
 
     def get_perm(self, key):
@@ -903,6 +904,19 @@ class MuralReacao(db.Model):
 
     __table_args__ = (db.UniqueConstraint('mensagem_id', 'user_id', 'emoji', name='uq_reacao'),)
 
+class MuralLog(db.Model):
+    """Registro manual de atualização feito pela equipe na aba Logs do Mural —
+    o que mexeu fora do sistema (planilha, Teams, etc.). Junto com o
+    AuditLog, forma a linha do tempo exportada em texto pro ChatGPT."""
+    id         = db.Column(db.Integer, primary_key=True)
+    user_id    = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    origem     = db.Column(db.String(20), default='outro')  # planilha, teams, outro
+    texto      = db.Column(db.Text, nullable=False)
+    link       = db.Column(db.String(500))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    autor = db.relationship('User', foreign_keys=[user_id])
+
 TIPOS_PERGUNTA_FORMULARIO = ('texto', 'numero', 'escala', 'multipla_escolha', 'sim_nao')
 
 class Formulario(db.Model):
@@ -970,7 +984,7 @@ def _usuarios_equipe_insercao():
     É todo mundo marcado como "Faz parte da equipe" (User.equipe) na tela
     de usuários — pra adicionar/remover alguém dessa lista, marque ou
     desmarque o checkbox lá, não precisa mexer em código."""
-    usuarios = User.query.filter_by(equipe=True).all()
+    usuarios = User.query.filter(User.equipe == True, User.ativo.isnot(False)).all()
     return sorted(usuarios, key=lambda u: nome_exibicao(u))
 
 class Demanda(db.Model):
@@ -1650,6 +1664,7 @@ def inject_notificacoes():
     reunioes_ativas = list(_reunioes_hoje_amanha(u))
     outros_com_agenda_publica = User.query.filter(
         User.id != u.id, User.agenda_ics_url.isnot(None), User.agenda_ics_visibilidade == 'todos',
+        User.ativo.isnot(False),
     ).all()
     for outro in outros_com_agenda_publica:
         for ev in _reunioes_hoje_amanha(outro):
@@ -1716,6 +1731,9 @@ def login():
                    db.func.lower(User.username) == identificador)
         ).first()
         if u and check_pw(u.password, request.form['password']):
+            if u.ativo is False:
+                flash('Esta conta foi desativada. Fale com o administrador se precisar de acesso.', 'danger')
+                return render_template('login.html', demo_link_ativo=bool(_demo_publico_user_id()))
             if not u.password.startswith(('pbkdf2:', 'scrypt:')):
                 u.password = hash_pw(request.form['password'])
             # Se ficou ausente por um tempo, avisa a própria pessoa ao voltar
@@ -1765,7 +1783,7 @@ def esqueci_senha():
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         u = User.query.filter(db.func.lower(User.email) == email).first()
-        if u:
+        if u and u.ativo is not False:
             token = _reset_senha_serializer().dumps(u.id)
             link = url_for('resetar_senha', token=token, _external=True)
             corpo = (
@@ -1790,7 +1808,7 @@ def resetar_senha(token):
         flash('Link inválido ou expirado. Solicite a redefinição novamente.', 'danger')
         return redirect(url_for('esqueci_senha'))
     u = User.query.get(user_id)
-    if not u:
+    if not u or u.ativo is False:
         flash('Usuário não encontrado.', 'danger')
         return redirect(url_for('esqueci_senha'))
     if request.method == 'POST':
@@ -4950,7 +4968,7 @@ def usuarios():
     agora = datetime.utcnow()
     inativos = []
     for u in users:
-        if u.role == 'admin':
+        if u.role == 'admin' or u.ativo is False:
             continue
         if u.ultimo_login:
             dias = (agora - u.ultimo_login).days
@@ -5134,6 +5152,25 @@ def usuario_foto(id):
         abort(404)
     return Response(u.foto, mimetype=u.foto_mimetype or 'image/jpeg')
 
+@app.route('/usuarios/<int:id>/ativar-desativar', methods=['POST'])
+@admin_required
+def usuario_ativar_desativar(id):
+    """Desativa (ou reativa) uma conta sem apagar nada — a pessoa só deixa de
+    conseguir entrar e some das listas da equipe. Alternativa ao Excluir pra
+    quem saiu da equipe mas tem histórico/cursos no nome."""
+    u = User.query.get_or_404(id)
+    if u.id == session['user_id']:
+        flash('Você não pode desativar sua própria conta.', 'danger')
+        return redirect(url_for('usuarios'))
+    u.ativo = (u.ativo is False)
+    if not u.ativo:
+        u.equipe = False  # sai do Calendário/listas de "Faz parte da equipe"
+    db.session.commit()
+    acao = 'reativar' if u.ativo else 'desativar'
+    log_action(session['user_id'], session['username'], acao, 'user', u.id, u.username)
+    flash(f'Usuário "{u.username}" ' + ('reativado — já pode entrar de novo.' if u.ativo else 'desativado — não consegue mais entrar no sistema.'), 'success')
+    return redirect(url_for('usuarios'))
+
 @app.route('/usuarios/<int:id>/excluir', methods=['POST'])
 @admin_required
 def usuario_excluir(id):
@@ -5191,21 +5228,72 @@ def _mural_minhas_conversas(meu_id):
         key=lambda c: ultima_por_contato[c.id], reverse=True
     )
 
+MURAL_LOG_ORIGENS = {'planilha': '📊 Planilha', 'teams': '💼 Teams', 'outro': '📝 Outro'}
+MURAL_LOG_PERIODOS = [1, 7, 30, 90]
+
+def _mural_log_linhas(dias):
+    """Linha do tempo da aba Logs: registros externos manuais e automáticos da
+    equipe — o que foi feito fora do sistema (planilha, Teams etc.). As
+    alterações feitas dentro do sistema ficam no Histórico, não aqui."""
+    desde = datetime.utcnow() - timedelta(days=dias)
+    linhas = []
+    for r in MuralLog.query.filter(MuralLog.created_at >= desde).order_by(MuralLog.created_at.desc()).limit(1000):
+        linhas.append({'quando': r.created_at, 'quem': r.autor.username if r.autor else '?',
+                       'origem': r.origem, 'rotulo': MURAL_LOG_ORIGENS.get(r.origem, r.origem),
+                       'texto': r.texto, 'link': r.link, 'id': r.id, 'user_id': r.user_id,
+                       'quando_br': r.created_at.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ) if r.created_at else None})
+    for e in MuralEvento.query.filter(MuralEvento.ocorrido_em >= desde).order_by(MuralEvento.ocorrido_em.desc()).limit(1000):
+        origem = 'planilha' if e.fonte == 'planilha' else 'teams'
+        linhas.append({'quando': e.ocorrido_em, 'quem': e.autor,
+                       'origem': origem, 'rotulo': MURAL_LOG_ORIGENS[origem],
+                       'texto': f'{e.origem}\n{e.texto}', 'link': e.link,
+                       'id': None, 'user_id': None,
+                       'quando_br': e.ocorrido_em.replace(tzinfo=timezone.utc).astimezone(_BRASIL_TZ)})
+    linhas.sort(key=lambda l: l['quando'], reverse=True)
+    return linhas[:1000]
+
+def _mural_log_texto(linhas, dias):
+    """Versão em texto puro da linha do tempo, pra colar/enviar pro ChatGPT."""
+    agora = datetime.now(_BRASIL_TZ).strftime('%d/%m/%Y %H:%M')
+    saida = [f'LOG DA EQUIPE — últimos {dias} dia(s) — gerado em {agora} (horário de Brasília)',
+             f'{len(linhas)} registro(s), do mais recente pro mais antigo.', '']
+    for l in linhas:
+        quando = l['quando_br'].strftime('%d/%m/%Y %H:%M') if l['quando_br'] else '?'
+        origem = {'planilha': 'PLANILHA', 'teams': 'TEAMS', 'outro': 'OUTRO'}.get(l['origem'], l['origem'])
+        linha = f'[{quando}] {l["quem"]} ({origem}): {l["texto"]}'
+        if l['link']:
+            linha += f' | link: {l["link"]}'
+        saida.append(linha)
+    return '\n'.join(saida)
+
+def _mural_log_dias():
+    dias = request.args.get('dias', 7, type=int)
+    return dias if dias in MURAL_LOG_PERIODOS else 7
+
 @app.route('/mural')
 @perm_check('can_view_mural')
 def mural():
     u = User.query.get(session['user_id'])
     aba = request.args.get('aba', 'publico')
     contato = None
-    if aba not in ('publico', 'log'):
+    if aba == 'log':
+        aba = 'logs'
+    if aba == 'logs':
+        estado = db.session.get(MuralSyncState, 'saude')
+        saude = json.loads(estado.valor) if estado else {}
+        dias = _mural_log_dias()
+        linhas = _mural_log_linhas(dias)
+        return render_template('mural.html', aba='logs', contato=None, conversas=_mural_minhas_conversas(u.id),
+                               todos_usuarios=User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all(),
+                               log_linhas=linhas, log_texto=_mural_log_texto(linhas, dias), log_dias=dias,
+                               log_periodos=MURAL_LOG_PERIODOS, log_origens=MURAL_LOG_ORIGENS, saude=saude)
+    if aba != 'publico':
         contato = User.query.get(aba) if aba.isdigit() else None
         if not contato or contato.id == u.id:
             aba = 'publico'
             contato = None
 
-    if aba == 'log':
-        mensagens = []
-    elif contato:
+    if contato:
         mensagens = MuralMensagem.query.filter(
             MuralMensagem.privada == True,
             db.or_(
@@ -5220,24 +5308,11 @@ def mural():
     conversas = _mural_minhas_conversas(u.id)
     if contato and contato.id not in {c.id for c in conversas}:
         conversas = [contato] + conversas  # conversa nova, ainda sem mensagem enviada
-    todos_usuarios = User.query.filter(User.id != u.id).order_by(User.username).all()
-
-    eventos, saude = [], {}
-    pagina = max(1, min(request.args.get('pagina', 1, type=int), 10000))
-    if aba == 'log':
-        externos = MuralEvento.query.order_by(MuralEvento.ocorrido_em.desc(), MuralEvento.id.desc()).offset(
-            (pagina - 1) * 50).limit(51).all()
-        eventos = [dict(autor=e.autor, origem=e.origem, fonte='Planilha' if e.fonte == 'planilha' else 'Teams',
-                        texto=e.texto, ocorrido_em=e.ocorrido_em, link=e.link) for e in externos]
-        estado = db.session.get(MuralSyncState, 'saude')
-        if estado:
-            saude = json.loads(estado.valor)
+    todos_usuarios = User.query.filter(User.id != u.id, User.ativo.isnot(False)).order_by(User.username).all()
 
     return render_template('mural.html', mensagens=mensagens, emojis=EMOJIS_MURAL,
                            reacoes_por_msg=reacoes_por_msg, minhas_reacoes=minhas_reacoes,
-                           aba=aba, contato=contato, conversas=conversas, todos_usuarios=todos_usuarios,
-                           eventos=eventos[:50], tem_proxima=len(eventos) > 50, pagina=pagina, saude=saude)
-
+                           aba=aba, contato=contato, conversas=conversas, todos_usuarios=todos_usuarios)
 
 @app.route('/api/mural/sincronizacao', methods=['GET', 'POST'])
 @csrf.exempt
@@ -5309,6 +5384,45 @@ def _notificar_mencao_mural(mensagem):
         f'Acesse o sistema pra ver e responder: '
         f'{request.url_root.rstrip("/")}{url_for("mural", aba=mensagem.user_id)}'
     )
+
+@app.route('/mural/logs/novo', methods=['POST'])
+@perm_check('can_view_mural')
+def mural_log_novo():
+    texto = (request.form.get('texto') or '').strip()
+    origem = request.form.get('origem', 'outro')
+    link = (request.form.get('link') or '').strip()
+    if origem not in MURAL_LOG_ORIGENS:
+        origem = 'outro'
+    if link and not link.lower().startswith(('http://', 'https://')):
+        link = ''  # só link web de verdade — evita javascript: no href
+    if not texto:
+        flash('Descreva o que foi atualizado.', 'danger')
+        return redirect(url_for('mural', aba='logs'))
+    db.session.add(MuralLog(user_id=session['user_id'], origem=origem, texto=texto[:2000], link=link[:500] or None))
+    db.session.commit()
+    flash('Atualização registrada no log.', 'success')
+    return redirect(url_for('mural', aba='logs'))
+
+@app.route('/mural/logs/<int:id>/excluir', methods=['POST'])
+@perm_check('can_view_mural')
+def mural_log_excluir(id):
+    r = MuralLog.query.get_or_404(id)
+    if r.user_id != session['user_id'] and session.get('role') != 'admin':
+        flash('Só quem registrou pode excluir.', 'danger')
+        return redirect(url_for('mural', aba='logs'))
+    db.session.delete(r)
+    db.session.commit()
+    flash('Registro excluído do log.', 'success')
+    return redirect(url_for('mural', aba='logs'))
+
+@app.route('/mural/logs.txt')
+@perm_check('can_view_mural')
+def mural_logs_txt():
+    dias = _mural_log_dias()
+    texto = _mural_log_texto(_mural_log_linhas(dias), dias)
+    nome = f'log_equipe_{datetime.now(_BRASIL_TZ).strftime("%Y%m%d_%H%M")}.txt'
+    return Response(texto, mimetype='text/plain; charset=utf-8',
+                    headers={'Content-Disposition': f'attachment; filename={nome}'})
 
 @app.route('/mural/nova', methods=['POST'])
 @perm_check('can_view_mural')
@@ -8592,7 +8706,8 @@ def _run_migrations():
                            ("telefone_whatsapp", "VARCHAR(30)"), ("whatsapp_prefs", "TEXT"),
                            ("whatsapp_apikey", "VARCHAR(50)"), ("agenda_ics_url", "TEXT"),
                            ("agenda_ics_visibilidade", "VARCHAR(20) DEFAULT 'pessoal'"),
-                           ("agenda_cache_json", "TEXT"), ("agenda_cache_em", "TIMESTAMP")]:
+                           ("agenda_cache_json", "TEXT"), ("agenda_cache_em", "TIMESTAMP"),
+                           ("ativo", "BOOLEAN DEFAULT true")]:
             try:
                 tbl = '"user"' if is_pg else 'user'
                 sql = f'ALTER TABLE {tbl} ADD COLUMN {col} {dtype}'
@@ -8673,6 +8788,20 @@ def ensure_db():
             return "Erro ao conectar com o banco de dados. Tente novamente em instantes.", 500
 
 ROTAS_LIVRES_TROCA_SENHA = {'minha_conta', 'logout', 'login', 'static', 'esqueci_senha', 'resetar_senha'}
+
+@app.before_request
+def bloquear_conta_desativada():
+    """Quem já estava logado quando a conta foi desativada perde o acesso na
+    próxima requisição — não espera a sessão expirar."""
+    if request.endpoint in ('login', 'logout', 'static') or request.endpoint is None:
+        return
+    if 'user_id' not in session:
+        return
+    u = User.query.get(session['user_id'])
+    if u and u.ativo is False:
+        session.clear()
+        flash('Esta conta foi desativada. Fale com o administrador se precisar de acesso.', 'danger')
+        return redirect(url_for('login'))
 
 @app.before_request
 def exigir_troca_senha():

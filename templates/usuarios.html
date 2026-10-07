@@ -96,6 +96,7 @@
               {% else %}
               <span class="badge badge-oculto" style="font-size:10px">Leitor</span>
               {% endif %}
+              {% if u.ativo is sameas false %}<span class="badge badge-descontinuado" style="font-size:10px">Desativado</span>{% endif %}
               <span style="font-size:11px;color:var(--text-muted)">desde {{ u.created_at.strftime('%m/%Y') }}</span>
             </div>
           </div>
@@ -187,6 +188,14 @@
             <button type="submit" class="btn btn-secondary" style="font-size:12px;padding:7px 12px" data-confirm="{{ u.username }} vai precisar trocar a senha no próximo login. Confirmar?">🔑</button>
           </form>
           {% if u.id != session.user_id %}
+          <form method="POST" action="{{ url_for('usuario_ativar_desativar', id=u.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if u.ativo is sameas false %}
+            <button type="submit" class="btn btn-secondary" style="font-size:12px;padding:7px 12px" title="Reativar conta" data-confirm="Reativar {{ u.username|e }}? A pessoa volta a conseguir entrar no sistema.">Reativar</button>
+            {% else %}
+            <button type="submit" class="btn btn-secondary" style="font-size:12px;padding:7px 12px" title="Desativar conta (não apaga nada)" data-confirm="Desativar {{ u.username|e }}? A pessoa não consegue mais entrar e sai das listas da equipe. Cursos e histórico continuam salvos, e dá pra reativar depois.">🚫</button>
+            {% endif %}
+          </form>
           <form method="POST" action="{{ url_for('usuario_excluir', id=u.id) }}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-danger" style="font-size:12px;padding:7px 12px" data-confirm="Excluir o usuário {{ u.username|e }}? A conta de acesso é apagada permanentemente — cursos e histórico que ele já registrou continuam salvos.">✕</button>
@@ -230,6 +239,7 @@
                 {{ u.username[0]|upper }}
               </div>
               <span style="font-weight:500">{{ u.username }}</span>
+              {% if u.ativo is sameas false %}<span class="badge badge-descontinuado" style="font-size:10px">Desativado</span>{% endif %}
             </div>
           </td>
           <td>
@@ -246,6 +256,14 @@
                 <button type="submit" class="btn btn-sm btn-secondary" data-confirm="{{ u.username }} vai precisar trocar a senha no próximo login. Confirmar?">🔑</button>
               </form>
               {% if u.id != session.user_id %}
+              <form method="POST" action="{{ url_for('usuario_ativar_desativar', id=u.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% if u.ativo is sameas false %}
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Reativar {{ u.username|e }}? A pessoa volta a conseguir entrar no sistema.">Reativar</button>
+                {% else %}
+                <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Desativar {{ u.username|e }}? A pessoa não consegue mais entrar e sai das listas da equipe. Cursos e histórico continuam salvos, e dá pra reativar depois.">Desativar</button>
+                {% endif %}
+              </form>
               <form method="POST" action="{{ url_for('usuario_excluir', id=u.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-sm btn-danger" data-confirm="Excluir o usuário {{ u.username|e }}? A conta de acesso é apagada permanentemente — cursos e histórico que ele já registrou continuam salvos.">Excluir</button>
