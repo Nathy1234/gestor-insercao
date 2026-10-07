@@ -14,7 +14,7 @@ import openpyxl
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from mural_log import diferencas_planilha, horario, snapshot_planilha
+from mural_log import diferencas_planilha, fontes_ausentes, horario, snapshot_planilha
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 
@@ -134,6 +134,8 @@ def executar():
     dono = os.environ['MS_GRAPH_USER_ID']
     eventos, novos_estados, falhas = [], {}, []
     inicio, fontes = agora(), 0
+    esperadas = json.loads(os.environ.get('MURAL_EXPECTED_SOURCES_JSON', '[]'))
+    encontradas = set()
     referencia = os.environ.get('MURAL_SYNC_START') or (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
     graph = Graph(token_delegado())
     if graph.get('/me')['id'] != dono:
@@ -190,6 +192,7 @@ def executar():
                 membros = {m.get('userId') for m in graph.lista(f'/chats/{cid}/members') if m.get('userId')}
                 if len(membros) < 3 or dono not in membros:
                     continue
+                encontradas.add(('grupo', chat['id']))
                 contexto = dict(fonte='teams_grupo', id=chat['id'], membros=sorted(membros),
                                 tipo_chat=chat['chatType'], origem=chat.get('topic') or 'Grupo do Teams',
                                 link=chat.get('webUrl', ''))
@@ -201,6 +204,7 @@ def executar():
 
     try:
         for team in graph.lista('/me/joinedTeams'):
+            encontradas.add(('equipe', team['id']))
             tid = quote(team['id'], safe='')
             try:
                 for canal in graph.lista(f'/teams/{tid}/channels'):
@@ -258,6 +262,7 @@ def executar():
         except Exception:
             # Não avançar o estado desta fonte; tentar novamente na próxima execução.
             falhas.append('Planilha: ' + (config.get('nome') or identidade))
+    falhas.extend(fontes_ausentes(esperadas, encontradas))
     novos_estados['planilhas_descobertas'] = list(planilhas.values())
     novos_estados['saude'] = dict(verificado_em=inicio, fontes_verificadas=fontes, falhas=falhas)
     # Só confirmar os cursores depois que todos os eventos chegaram ao Gestor.

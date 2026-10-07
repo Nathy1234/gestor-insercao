@@ -36,13 +36,19 @@ no Gestor para que sua aba seja monitorada; o coletor não cadastra cursos.
 3. No GitHub Actions, configurar os secrets `MURAL_SYNC_SECRET`,
    `MS_GRAPH_CLIENT_SECRET`, `MS_GRAPH_REFRESH_TOKEN`. Configurar as variables
    `GESTOR_URL`, `MS_GRAPH_USER_ID`, `MS_GRAPH_TENANT_ID`, `MS_GRAPH_CLIENT_ID`,
-   `MURAL_SPREADSHEETS_JSON` e opcionalmente `MURAL_SYNC_START` (ISO 8601 com fuso).
+   `MURAL_SPREADSHEETS_JSON`, opcionalmente `MURAL_EXPECTED_SOURCES_JSON` e
+   `MURAL_SYNC_START` (ISO 8601 com fuso).
    O ID da titular precisa coincidir nos dois ambientes.
 4. `MURAL_SPREADSHEETS_JSON` é um array de arquivos confirmados:
    `[{"nome":"Inserção Geral","drive_id":"ID","item_id":"ID"}]`.
    Também aceita `{"id":"identidade-estavel","nome":"Links INOVA","url":"https://tenant.sharepoint.com/..."}`.
    Confirmar os links das planilhas ativas; cópias antigas de planilhas não equivalem
    à fonte em uso. Google Sheets, CSV e arquivos locais não estão cobertos nesta versão.
+   `MURAL_EXPECTED_SOURCES_JSON` é um array opcional de grupos/equipes que a titular
+   forneceu: `[{"tipo":"grupo","id":"ID","nome":"Grupo"},{"tipo":"equipe","id":"ID","nome":"Equipe"}]`.
+   Não restringe a descoberta dos demais grupos autorizados: apenas avisa no mural
+   se alguma fonte esperada não puder ser encontrada. Links reais e configurações
+   pessoais devem ficar nas variables privadas, nunca no repositório público.
 5. Definir `MURAL_SYNC_ENABLED=true` e executar manualmente o workflow no teste.
    Conferir eventos, uma segunda execução sem duplicatas e uma alteração de célula.
    O cron é horário, no minuto 17, e só funciona quando o workflow está no branch

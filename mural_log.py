@@ -83,3 +83,9 @@ def diferencas_planilha(antes, depois):
                 resto = f' e outras {len(mudaram) - 30}' if len(mudaram) > 30 else ''
                 resultado.append(f'{aba}: {len(mudaram)} células alteradas ({amostra}{resto}).')
     return resultado
+
+
+def fontes_ausentes(esperadas, encontradas):
+    """Fontes fornecidas pela titular não podem sumir silenciosamente da descoberta."""
+    return [f"Fonte configurada não encontrada: {f.get('nome') or f['id']}"
+            for f in esperadas if (f['tipo'], f['id']) not in encontradas]

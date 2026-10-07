@@ -11,7 +11,7 @@ _temporario = tempfile.TemporaryDirectory()
 os.environ['DATABASE_URL'] = 'sqlite:///' + str(Path(_temporario.name) / 'teste.db')
 os.environ['SECRET_KEY'] = 'chave-exclusiva-de-testes'
 import app as gestor
-from mural_log import diferencas_planilha, snapshot_planilha, validar_evento
+from mural_log import diferencas_planilha, fontes_ausentes, snapshot_planilha, validar_evento
 from scripts.sincronizar_mural import evento_mensagem
 
 
@@ -114,6 +114,12 @@ class LogTest(unittest.TestCase):
         self.assertEqual(validar_evento(e, 'titular')['link'], '')
         e['link'] = 'https://teams.microsoft.com.evil.example/path'
         self.assertEqual(validar_evento(e, 'titular')['link'], '')
+
+    def test_fonte_fornecida_ausente_vira_pendencia(self):
+        esperadas = [{'tipo': 'grupo', 'id': 'g1', 'nome': 'Grupo confirmado'},
+                     {'tipo': 'equipe', 'id': 't1', 'nome': 'Equipe pendente'}]
+        self.assertEqual(fontes_ausentes(esperadas, {('grupo', 'g1')}),
+                         ['Fonte configurada não encontrada: Equipe pendente'])
 
     def test_todas_abas_inclusive_ocultas_e_sem_valores_no_estado(self):
         wb = openpyxl.Workbook()
